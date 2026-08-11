@@ -1,0 +1,542 @@
+<!-- index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quincy Dating Platform — Intentional Connections, Modern Matchmaking</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- Age Verification Modal Overlay -->
+  <div id="ageGateModal" class="age-gate-overlay" role="dialog" aria-modal="true" aria-labelledby="ageGateTitle">
+    <div class="age-gate-card glass-panel">
+      <div class="brand-badge">
+        <span class="heart-icon">♥</span> Quincy
+      </div>
+      <h2 id="ageGateTitle">Welcome to Quincy</h2>
+      <p class="age-gate-subtitle">Designed for intentional singles seeking genuine, long-term relationships.</p>
+      
+      <div class="age-verification-box">
+        <p class="age-prompt-text">Please confirm your age to enter</p>
+        <div class="age-actions">
+          <button id="btnAgeVerify" class="btn btn-primary btn-glow">I am 18 or older</button>
+          <button id="btnAgeDeny" class="btn btn-outline">I am under 18</button>
+        </div>
+        <p id="ageErrorMessage" class="error-text hidden">Quincy is strictly reserved for adults 18 years and older.</p>
+      </div>
+      <p class="age-gate-footer">By entering, you agree to our Terms of Service & Privacy Policy.</p>
+    </div>
+  </div>
+
+  <!-- Main Application Container -->
+  <div id="appContainer" class="app-container content-blurred">
+    
+    <!-- Navigation Bar -->
+    <header class="navbar-wrapper">
+      <nav class="navbar glass-panel">
+        <a href="#" class="nav-brand">
+          <span class="brand-logo-mark">Q</span>
+          <span class="brand-text">Quincy<span class="brand-dot">.</span></span>
+        </a>
+        
+        <ul class="nav-links">
+          <li><a href="#features">Why Quincy</a></li>
+          <li><a href="#interactive-preview">Interactive Preview</a></li>
+          <li><a href="#community">Community</a></li>
+          <li><a href="#testimonials">Stories</a></li>
+        </ul>
+
+        <div class="nav-actions">
+          <button id="btnOpenRegister" class="btn btn-primary btn-sm btn-glow">Try Demo / Register</button>
+          <a href="#community" class="btn btn-secondary btn-sm">Join Group</a>
+          <button id="btnOpenLikesDrawer" class="btn btn-outline btn-sm likes-nav-btn" title="Who Liked You">
+            ♥ <span id="likesBadge" class="likes-badge hidden">0</span>
+          </button>
+          <button id="btnManageProfile" class="btn btn-outline btn-sm hidden">Manage Profile</button>
+        </div>
+      </nav>
+    </header>
+
+    <!-- Hero Section with Figma-Style Dynamic Prototyping Cards -->
+    <section class="hero-section">
+      <div class="hero-bg-glow glow-1"></div>
+      <div class="hero-bg-glow glow-2"></div>
+      
+      <div class="hero-container">
+        <div class="hero-content">
+          <div class="pill-badge">
+            <span class="pill-dot"></span>
+            <span>Synthesizing Intentionality & Scale</span>
+          </div>
+          <h1 class="hero-title">
+            Deep Prompts. <br />
+            <span class="gradient-text">Verified Singles.</span> <br />
+            Real Proximity.
+          </h1>
+          <p class="hero-description">
+            Quincy combines the deep profile prompts of Hinge, the vetted trust of eHarmony, and the fluid proximity discovery of Tinder & Bumble into one modern relationship platform.
+          </p>
+
+          <div class="hero-cta-group">
+            <a href="https://chat.whatsapp.com/" target="_blank" rel="noopener" class="btn btn-primary btn-lg btn-glow">
+              <svg class="cta-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.816 9.816 0 0 0 12.04 2z"/></svg>
+              Join WhatsApp Community
+            </a>
+            <button id="btnHeroRegister" class="btn btn-outline btn-lg">
+              Register Profile
+            </button>
+          </div>
+
+          <div class="hero-stats">
+            <div class="stat-item">
+              <span class="stat-value" data-target="94">0</span><span class="stat-symbol">%</span>
+              <span class="stat-label">Long-Term Intent</span>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat-item">
+              <span class="stat-value" data-target="100">0</span><span class="stat-symbol">%</span>
+              <span class="stat-label">ID Verified Profiles</span>
+            </div>
+            <div class="stat-divider"></div>
+            <div class="stat-item">
+              <span class="stat-value" data-target="3.2">0</span><span class="stat-symbol">km</span>
+              <span class="stat-label">Average Match Radius</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Figma-Style Smart Animate Dynamic Prototyping Container -->
+        <div class="hero-visual">
+          <div class="figma-prototype-stage">
+            
+            <!-- Floating Smart Animate Card 1 -->
+            <div class="proto-card card-main glass-panel animated-float">
+              <div class="proto-card-header">
+                <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80" alt="Sophia Profile" class="proto-avatar" />
+                <div class="proto-user-info">
+                  <div class="proto-name-row">
+                    <h3>Sophia, 27</h3>
+                    <span class="verified-badge" title="ID Verified">✓</span>
+                  </div>
+                  <p class="proto-sub">Architect • 2.4 miles away</p>
+                </div>
+                <div class="match-score-pill">96% Match</div>
+              </div>
+
+              <div class="proto-prompt-box prompt-clickable" data-prompt-id="hero-1">
+                <span class="prompt-tag">Dating Intent</span>
+                <p class="prompt-question">My non-negotiable Sunday ritual...</p>
+                <p class="prompt-answer">Farmers market espresso run, design sketching in the park, and cooking pasta from scratch with someone who loves good conversation.</p>
+                <button class="inline-like-btn" title="Like this prompt">♥ Like Prompt</button>
+              </div>
+
+              <div class="proto-actions">
+                <button class="proto-btn btn-pass" aria-label="Pass">✕</button>
+                <button class="proto-btn btn-comment" aria-label="Comment">💬 Comment</button>
+                <button class="proto-btn btn-like" aria-label="Like">♥</button>
+              </div>
+            </div>
+
+            <!-- Floating Smart Animate Card 2 (Background Stack) -->
+            <div class="proto-card card-stacked glass-panel">
+              <div class="proto-card-header">
+                <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80" alt="Julian Profile" class="proto-avatar" />
+                <div>
+                  <h3>Julian, 29</h3>
+                  <p class="proto-sub">Product Designer • 1.8 miles away</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Dynamic UI Prototype Pins/Annotations -->
+            <div class="figma-cursor cursor-1">
+              <svg viewBox="0 0 24 24" class="cursor-svg"><path d="M3 3l7 18 3-7 7-3L3 3z"/></svg>
+              <span class="cursor-label">Intentional Prompt</span>
+            </div>
+
+            <div class="figma-cursor cursor-2">
+              <svg viewBox="0 0 24 24" class="cursor-svg"><path d="M3 3l7 18 3-7 7-3L3 3z"/></svg>
+              <span class="cursor-label">Proximity Radar</span>
+            </div>
+
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Value Proposition Highlights (Competitor Synthesis) -->
+    <section id="features" class="features-section">
+      <div class="section-container">
+        <div class="section-header">
+          <span class="section-tagline">Best-in-Class Mechanics</span>
+          <h2 class="section-title">Synthesizing the Gold Standard of Modern Dating</h2>
+          <p class="section-subtitle">We took the highest-performing features from leading apps and engineered them into a singular, high-conversion experience.</p>
+        </div>
+
+        <div class="features-grid">
+          <!-- Feature 1: Hinge Synthesis -->
+          <div class="feature-card glass-panel" id="feature-hinge">
+            <div class="feature-icon-wrapper icon-rose">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
+            </div>
+            <div class="feature-badge">Hinge-Inspired</div>
+            <h3>Intentional Profile Prompts</h3>
+            <p>No generic bios. Quincy profiles are driven by deep value prompts, audio snippets, and lifestyle non-negotiables that spark meaningful conversations instantly.</p>
+            <ul class="feature-bullets">
+              <li>Inline likes on specific photos or answers</li>
+              <li>Micro-prompt audio responses</li>
+              <li>Values & relationship goal filters</li>
+            </ul>
+
+            <!-- Interactive Demo: Audio Player -->
+            <div class="feature-interactive">
+              <div class="audio-player glass-panel-inner">
+                <button id="audioPlayBtn" class="audio-play-btn" aria-label="Play audio snippet">▶</button>
+                <div class="audio-visualizer">
+                  <div class="viz-bar" style="--h:40%"></div>
+                  <div class="viz-bar" style="--h:70%"></div>
+                  <div class="viz-bar" style="--h:50%"></div>
+                  <div class="viz-bar" style="--h:90%"></div>
+                  <div class="viz-bar" style="--h:60%"></div>
+                  <div class="viz-bar" style="--h:80%"></div>
+                  <div class="viz-bar" style="--h:45%"></div>
+                  <div class="viz-bar" style="--h:75%"></div>
+                </div>
+                <span class="audio-label">Micro-prompt: "Sunday vibe"</span>
+              </div>
+              <p class="feature-tip">Click play to hear a sample intentional audio response.</p>
+            </div>
+          </div>
+
+          <!-- Feature 2: Tinder/Bumble Synthesis -->
+          <div class="feature-card glass-panel" id="feature-proximity">
+            <div class="feature-icon-wrapper icon-gold">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>
+            </div>
+            <div class="feature-badge">Tinder & Bumble-Inspired</div>
+            <h3>Proximity & Scale Discovery</h3>
+            <p>Enjoy seamless, hyper-local discovery with intuitive gesture transitions, proximity radar, and modern matching speeds built for vibrant urban centers.</p>
+            <ul class="feature-bullets">
+              <li>Real-time distance-based matching</li>
+              <li>Fluid, high-fps card transitions</li>
+              <li>First-move options & modern etiquette</li>
+            </ul>
+
+            <!-- Interactive Distance Slider -->
+            <div class="feature-interactive">
+              <label class="slider-label" for="proximitySlider">Proximity Radar: <span id="proximityValue">10</span> miles</label>
+              <input type="range" id="proximitySlider" class="proximity-slider" min="1" max="25" value="10" />
+              <div class="radar-visual">
+                <div class="radar-ring" style="--r:30%"></div>
+                <div class="radar-ring" style="--r:60%"></div>
+                <div class="radar-ring active" style="--r:100%"></div>
+                <div class="radar-center"></div>
+              </div>
+              <p class="feature-tip">Adjust the slider — the interactive preview will filter profiles by distance.</p>
+            </div>
+          </div>
+
+          <!-- Feature 3: Match & eHarmony Synthesis -->
+          <div class="feature-card glass-panel" id="feature-verified">
+            <div class="feature-icon-wrapper icon-indigo">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+            </div>
+            <div class="feature-badge">Match & eHarmony-Inspired</div>
+            <h3>100% Vetted & Verified Singles</h3>
+            <p>Safety and commitment come first. Mandatory ID verification, compatibility scoring, and AI catfishing defense ensure high-trust, genuine interactions.</p>
+            <ul class="feature-bullets">
+              <li>Biometric & Government ID verification</li>
+              <li>Psychometric compatibility scoring</li>
+              <li>Zero tolerance for fake or inactive profiles</li>
+            </ul>
+
+            <div class="feature-interactive">
+              <div class="verification-demo">
+                <span class="verified-pill">✓ ID Verified</span>
+                <span class="compat-score">Compatibility: 94%</span>
+              </div>
+              <p class="feature-tip">All profiles in the demo stack are ID-verified by default.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Interactive Profile & Matching Preview Widget -->
+    <section id="interactive-preview" class="preview-section">
+      <div class="section-container">
+        <div class="section-header">
+          <span class="section-tagline">Try It Yourself</span>
+          <h2 class="section-title">Interactive Matching Preview</h2>
+          <p class="section-subtitle">Experience how Quincy handles proximity discovery, value-matching scores, and prompt-driven likes in real time.</p>
+        </div>
+
+        <div class="simulator-wrapper glass-panel">
+          <div class="simulator-controls">
+            <span class="sim-label">Simulated Location: <strong>New York, NY</strong></span>
+            <div class="sim-filter-group">
+              <button class="sim-filter active" data-filter="all">All Intentions</button>
+              <button class="sim-filter" data-filter="marriage">Long-Term</button>
+              <button class="sim-filter" data-filter="verified">Verified Only</button>
+            </div>
+          </div>
+
+          <div class="simulator-stage">
+            <!-- Dynamic Profile Container populated by JS -->
+            <div id="simCardStack" class="sim-card-stack">
+              <!-- Rendered dynamically -->
+            </div>
+          </div>
+
+          <div class="simulator-footer">
+            <p id="simStatusText">Click the heart to like a prompt, or pass to see the next verified profile.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Community CTA Section ("Join Our Community") -->
+    <section id="community" class="community-section">
+      <div class="section-container">
+        <div class="community-banner glass-panel">
+          <div class="community-content">
+            <span class="community-pill">Exclusive Relationship Circle</span>
+            <h2>Join the Official Quincy Relationship Group</h2>
+            <p>Connect with serious, like-minded singles, receive expert awareness advice, access curated relationship book reads, and attend exclusive local mixer events.</p>
+
+            <div class="community-perks-grid">
+              <div class="perk-item">
+                <span class="perk-icon">💡</span>
+                <div>
+                  <h4>Daily Relationship Insights</h4>
+                  <p>Actionable advice on communication, boundaries, and emotional alignment.</p>
+                </div>
+              </div>
+              <div class="perk-item">
+                <span class="perk-icon">📚</span>
+                <div>
+                  <h4>Recommended Reads</h4>
+                  <p>Monthly curated literature on relationship psychology and personal growth.</p>
+                </div>
+              </div>
+              <div class="perk-item">
+                <span class="perk-icon">🛡️</span>
+                <div>
+                  <h4>Expert Safety & Vetting Tips</h4>
+                  <p>Learn how to navigate modern dating with confidence and high emotional safety.</p>
+                </div>
+              </div>
+              <div class="perk-item">
+                <span class="perk-icon">🍸</span>
+                <div>
+                  <h4>Private Single Mixers</h4>
+                  <p>Invitations to verified, high-vibe offline social gatherings in your city.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="community-cta-box">
+              <a href="https://chat.whatsapp.com/" target="_blank" rel="noopener" class="btn btn-whatsapp btn-lg btn-glow">
+                <svg class="whatsapp-icon" viewBox="0 0 24 24" fill="currentColor"><path d="M12.04 2c-5.46 0-9.91 4.45-9.91 9.91 0 1.75.46 3.45 1.32 4.95L2.05 22l5.25-1.38c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.91-4.45 9.91-9.91 0-2.65-1.03-5.14-2.9-7.01A9.816 9.816 0 0 0 12.04 2z"/></svg>
+                Join Quincy WhatsApp Group
+              </a>
+              <span class="cta-note">Instant Access • Free to Join • Verified Members</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="footer-container">
+        <div class="footer-brand-col">
+          <a href="#" class="nav-brand">
+            <span class="brand-logo-mark">Q</span>
+            <span class="brand-text">Quincy<span class="brand-dot">.</span></span>
+          </a>
+          <p class="footer-tagline">The intentional dating platform engineered for long-term clarity, deep compatibility, and modern trust.</p>
+        </div>
+
+        <div class="footer-links-col">
+          <h4>Platform</h4>
+          <ul>
+            <li><a href="#features">Why Quincy</a></li>
+            <li><a href="#interactive-preview">Match Preview</a></li>
+            <li><a href="#community">Community Group</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-links-col">
+          <h4>Safety & Trust</h4>
+          <ul>
+            <li><a href="#">ID Verification</a></li>
+            <li><a href="#">Safety Guidelines</a></li>
+            <li><a href="#">Community Standards</a></li>
+          </ul>
+        </div>
+
+        <div class="footer-links-col">
+          <h4>Legal</h4>
+          <ul>
+            <li><a href="#">Privacy Policy</a></li>
+            <li><a href="#">Terms of Service</a></li>
+            <li><a href="#">Cookie Policy</a></li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <p>&copy; 2026 Quincy Relationship Platform Inc. All rights reserved.</p>
+      </div>
+    </footer>
+
+    <!-- Interactive Match Celebration Modal -->
+    <div id="matchModal" class="match-modal-overlay hidden">
+      <div class="match-modal-card glass-panel">
+        <div class="match-sparkles">✨</div>
+        <span class="match-tagline">IT'S A QUINCY MATCH!</span>
+        <h2 id="matchNameHeading">You and Maya connected!</h2>
+        <p>You both aligned on values and prompt compatibility.</p>
+        <div class="match-avatars-row">
+          <img id="matchUserAvatar" src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80" alt="User Avatar" class="match-avatar" />
+          <div class="match-heart-badge">♥</div>
+          <img id="matchTargetAvatar" src="" alt="Matched Profile" class="match-avatar" />
+        </div>
+        <div class="first-move-indicator hidden" id="firstMoveIndicator">
+          <span>You made the first move — they can now reply.</span>
+        </div>
+        <div class="match-modal-actions">
+          <a href="https://chat.whatsapp.com/" target="_blank" rel="noopener" class="btn btn-primary btn-glow">Chat in WhatsApp Community</a>
+          <button id="btnCloseMatchModal" class="btn btn-outline">Keep Exploring Demo</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Registration Modal -->
+    <div id="registerModal" class="match-modal-overlay hidden">
+      <div class="match-modal-card glass-panel register-modal-card">
+        <h2>Create Your Quincy Profile</h2>
+        <p class="modal-sub">Join the intentional dating community. All fields help power better matches.</p>
+        
+        <form id="registerForm" class="register-form" novalidate>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="regName">Name *</label>
+              <input type="text" id="regName" name="name" required maxlength="40" placeholder="Your first name" />
+              <span class="field-error" id="errName"></span>
+            </div>
+            <div class="form-group">
+              <label for="regAge">Age *</label>
+              <input type="number" id="regAge" name="age" required min="18" max="99" placeholder="18+" />
+              <span class="field-error" id="errAge"></span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="regOccupation">Occupation *</label>
+            <input type="text" id="regOccupation" name="occupation" required maxlength="60" placeholder="e.g. Software Lead" />
+            <span class="field-error" id="errOccupation"></span>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="regIntent">Relationship Intent *</label>
+              <select id="regIntent" name="intent" required>
+                <option value="">Select intent</option>
+                <option value="marriage">Marriage</option>
+                <option value="long-term">Long-Term</option>
+                <option value="verified">Verified Connections</option>
+              </select>
+              <span class="field-error" id="errIntent"></span>
+            </div>
+            <div class="form-group form-group-checkbox">
+              <label class="checkbox-label">
+                <input type="checkbox" id="regVerified" name="verified" checked />
+                <span>ID Verified</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="regAvatar">Avatar Image URL</label>
+            <input type="url" id="regAvatar" name="avatar" placeholder="https://... or leave blank for preset" />
+            <div class="avatar-presets">
+              <button type="button" class="avatar-preset" data-url="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80">1</button>
+              <button type="button" class="avatar-preset" data-url="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80">2</button>
+              <button type="button" class="avatar-preset" data-url="https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=300&q=80">3</button>
+              <button type="button" class="avatar-preset" data-url="https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=300&q=80">4</button>
+            </div>
+            <span class="field-error" id="errAvatar"></span>
+          </div>
+
+          <div class="form-group">
+            <label for="regPromptTag">Prompt Tag *</label>
+            <select id="regPromptTag" name="promptTag" required>
+              <option value="Relationship Goal">Relationship Goal</option>
+              <option value="Sunday Vibe">Sunday Vibe</option>
+              <option value="Green Flags I Look For">Green Flags I Look For</option>
+              <option value="Dating Intent">Dating Intent</option>
+              <option value="Non-Negotiable">Non-Negotiable</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="regPromptQuestion">Prompt Question *</label>
+            <input type="text" id="regPromptQuestion" name="promptQuestion" required maxlength="120" placeholder="e.g. The key to a lasting partnership is..." />
+            <span class="field-error" id="errPromptQuestion"></span>
+          </div>
+
+          <div class="form-group">
+            <label for="regPromptAnswer">Your Answer *</label>
+            <textarea id="regPromptAnswer" name="promptAnswer" required rows="3" maxlength="280" placeholder="Share something meaningful..."></textarea>
+            <span class="field-error" id="errPromptAnswer"></span>
+          </div>
+
+          <div class="form-actions">
+            <button type="button" id="btnCancelRegister" class="btn btn-outline">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-glow">Create Profile</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Confirm Erase Modal -->
+    <div id="eraseConfirmModal" class="match-modal-overlay hidden">
+      <div class="match-modal-card glass-panel">
+        <h2>Erase Profile?</h2>
+        <p>Are you sure you want to permanently erase your profile from Quincy? This action cannot be undone.</p>
+        <div class="match-modal-actions">
+          <button id="btnConfirmErase" class="btn btn-primary" style="background:#EF4444;">Yes, Erase Permanently</button>
+          <button id="btnCancelErase" class="btn btn-outline">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Who Liked You Drawer -->
+    <div id="likesDrawer" class="likes-drawer hidden">
+      <div class="likes-drawer-panel glass-panel">
+        <div class="likes-drawer-header">
+          <h3>Who Liked You</h3>
+          <button id="btnCloseLikesDrawer" class="btn btn-outline btn-sm">Close</button>
+        </div>
+        <div id="likesList" class="likes-list">
+          <!-- Populated by JS -->
+        </div>
+        <p id="likesEmpty" class="likes-empty hidden">No likes yet. Keep exploring and send intentional likes!</p>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast hidden"></div>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

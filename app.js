@@ -9,6 +9,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initAgeGate();
   initStatsCounter();
   initState();
+  initHeroCard();
   initInteractiveSimulator();
   initMatchModal();
   initRegistration();
@@ -21,6 +22,8 @@ document.addEventListener('DOMContentLoaded', () => {
   initLocationFallback();
   initComments();
   initRealtimeSync();
+  initPresenceHeartbeat();
+  initPhotoUploadModule();
   updateUIForUser();
 });
 
@@ -35,6 +38,8 @@ const STORAGE_MESSAGES = 'quincy_messages';
 const STORAGE_SESSION = 'quincy_session_token';
 const STORAGE_TYPING = 'quincy_typing';
 const STORAGE_COMMENTS = 'quincy_profile_comments';
+const STORAGE_PRESENCE = 'quincy_presence';
+const ONLINE_THRESHOLD_MS = 3 * 60 * 1000; // active within last 3 minutes = "online"
 
 const StorageAdapter = {
   async get(key, fallback) {
@@ -84,6 +89,244 @@ let searchQuery = '';
 let ageMin = 18;
 let ageMax = 99;
 let activeCommentProfileId = null;
+let heroProfile = null;
+let heroStackedProfile = null;
+let presenceHeartbeatTimer = null;
+let heroRefreshTimer = null;
+
+/** Fallback demo data shown only when no real (non-self) profiles exist yet */
+const DEFAULT_HERO_PROFILE = {
+  id: 'demo_sophia',
+  name: 'Sophia',
+  age: 27,
+  occupation: 'Architect',
+  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=800&q=80',
+  photos: [
+    'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=800&q=80',
+    'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=800&q=80',
+    'https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=800&q=80',
+    'https://images.unsplash.com/photo-1488426862026-3ee34a7d66df?auto=format&fit=crop&w=800&q=80'
+  ],
+  promptTag: 'Dating Intent',
+  promptQuestion: 'My non-negotiable Sunday ritual...',
+  promptAnswer: 'Farmers market espresso run, design sketching in the park, and cooking pasta from scratch with someone who loves good conversation.',
+  verified: true,
+  locationDisplay: '2.4 miles away',
+  matchScoreDisplay: '96% Match',
+  interests: ['Architecture', 'Farmers Markets', 'Pasta', 'Design', 'Travel'],
+  basics: ['🚭 Non-smoker', '🏋️ Sometimes', '🍸 Socially', '🐾 Love dogs'],
+  intentLabel: 'Long-term',
+  isDemoFallback: true
+};
+const DEFAULT_STACKED_PROFILE = {
+  id: 'demo_julian',
+  name: 'Julian',
+  age: 29,
+  occupation: 'Product Designer',
+  avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=800&q=80',
+  photos: [
+    'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=800&q=80',
+    'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=800&q=80'
+  ],
+  locationDisplay: '1.8 miles away',
+  interests: ['Product Design', 'Coffee', 'Hiking'],
+  basics: ['🚭 Non-smoker'],
+  isDemoFallback: true
+};
+
+/* Max photos per profile (media pipeline constraint) */
+const MAX_PROFILE_PHOTOS = 8;
+
+/** Normalize any profile to a photos[] array (backward compatible with single avatar). */
+function getProfilePhotos(profile) {
+  if (!profile) return [];
+  if (Array.isArray(profile.photos) && profile.photos.length) {
+    return profile.photos.filter(Boolean).slice(0, MAX_PROFILE_PHOTOS);
+  }
+  if (profile.avatar) return [profile.avatar];
+  return ['https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=800&q=80'];
+}
+
+function getPrimaryAvatar(profile) {
+  const photos = getProfilePhotos(profile);
+  return photos[0] || profile?.avatar || '';
+}
+
+/** Client-side image preload for adjacent carousel frames. */
+const _preloadCache = new Set();
+function preloadAdjacentPhotos(photos, index) {
+  [index - 1, index + 1].forEach(i => {
+    if (i < 0 || i >= photos.length) return;
+    const url = photos[i];
+    if (!url || _preloadCache.has(url)) return;
+    const img = new Image();
+    img.src = url;
+    _preloadCache.add(url);
+  });
+}
+
+/**
+ * Build photo gallery DOM (story bars + images + tap zones + optional meta host).
+ * Returns { root, setIndex, getIndex, destroy } controller.
+ */
+function createPhotoCarousel(photos, options = {}) {
+  const {
+    initialIndex = 0,
+    showMeta = false,
+    onIndexChange = null,
+    className = ''
+  } = options;
+  const urls = (photos && photos.length) ? photos.slice(0, MAX_PROFILE_PHOTOS) : getProfilePhotos({});
+  let index = Math.max(0, Math.min(initialIndex, urls.length - 1));
+
+  const root = document.createElement('div');
+  root.className = 'photo-gallery' + (className ? ' ' + className : '');
+  root.setAttribute('role', 'img');
+  root.setAttribute('aria-label', 'Profile photos');
+
+  const progress = document.createElement('div');
+  progress.className = 'story-progress';
+  urls.forEach((_, i) => {
+    const seg = document.createElement('div');
+    seg.className = 'story-segment' + (i < index ? ' filled' : (i === index ? ' active' : ''));
+    if (i === index) {
+      const fill = document.createElement('div');
+      fill.className = 'story-fill';
+      seg.appendChild(fill);
+    }
+    progress.appendChild(seg);
+  });
+  root.appendChild(progress);
+
+  const imgEls = urls.map((url, i) => {
+    const img = document.createElement('img');
+    img.className = 'photo-gallery-img' + (i === index ? ' active' : '');
+    img.src = url;
+    img.alt = `Photo ${i + 1}`;
+    img.loading = i === 0 ? 'eager' : 'lazy';
+    img.draggable = false;
+    root.appendChild(img);
+    return img;
+  });
+
+  const leftZone = document.createElement('div');
+  leftZone.className = 'gallery-tap-zone gallery-tap-left';
+  leftZone.setAttribute('data-dir', 'prev');
+  leftZone.setAttribute('aria-label', 'Previous photo');
+  const rightZone = document.createElement('div');
+  rightZone.className = 'gallery-tap-zone gallery-tap-right';
+  rightZone.setAttribute('data-dir', 'next');
+  rightZone.setAttribute('aria-label', 'Next photo');
+  root.appendChild(leftZone);
+  root.appendChild(rightZone);
+
+  function syncUI() {
+    imgEls.forEach((img, i) => img.classList.toggle('active', i === index));
+    const segs = progress.querySelectorAll('.story-segment');
+    segs.forEach((seg, i) => {
+      seg.classList.remove('filled', 'active');
+      seg.innerHTML = '';
+      if (i < index) seg.classList.add('filled');
+      else if (i === index) {
+        seg.classList.add('active');
+        const fill = document.createElement('div');
+        fill.className = 'story-fill';
+        seg.appendChild(fill);
+      }
+    });
+    preloadAdjacentPhotos(urls, index);
+    if (typeof onIndexChange === 'function') onIndexChange(index);
+  }
+
+  function setIndex(next) {
+    if (!urls.length) return;
+    index = ((next % urls.length) + urls.length) % urls.length;
+    syncUI();
+  }
+
+  function next() { setIndex(index + 1); }
+  function prev() { setIndex(index - 1); }
+
+  leftZone.addEventListener('click', (e) => { e.stopPropagation(); prev(); });
+  rightZone.addEventListener('click', (e) => { e.stopPropagation(); next(); });
+
+  // Pointer / touch horizontal swipe
+  let startX = 0, startY = 0, tracking = false;
+  const onDown = (e) => {
+    const pt = e.touches ? e.touches[0] : e;
+    startX = pt.clientX;
+    startY = pt.clientY;
+    tracking = true;
+  };
+  const onUp = (e) => {
+    if (!tracking) return;
+    tracking = false;
+    const pt = e.changedTouches ? e.changedTouches[0] : e;
+    const dx = pt.clientX - startX;
+    const dy = pt.clientY - startY;
+    if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy) * 1.2) return;
+    if (dx < 0) next();
+    else prev();
+  };
+  root.addEventListener('touchstart', onDown, { passive: true });
+  root.addEventListener('touchend', onUp, { passive: true });
+  root.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'touch') return;
+    onDown(e);
+  });
+  root.addEventListener('pointerup', (e) => {
+    if (e.pointerType === 'touch') return;
+    onUp(e);
+  });
+
+  preloadAdjacentPhotos(urls, index);
+
+  return {
+    root,
+    setIndex,
+    getIndex: () => index,
+    next,
+    prev,
+    destroy() {
+      root.removeEventListener('touchstart', onDown);
+      root.removeEventListener('touchend', onUp);
+    }
+  };
+}
+
+/** Intent display label helper */
+function intentDisplayLabel(intent) {
+  if (!intent) return 'Still figuring it out';
+  const map = {
+    marriage: 'Marriage',
+    'long-term': 'Long-term',
+    verified: 'Verified connections'
+  };
+  return map[intent] || String(intent);
+}
+
+function buildMetaChipsHtml(profile) {
+  const chips = [];
+  if (profile.verified) chips.push('<span class="meta-chip verified-chip">✓ Verified</span>');
+  chips.push(`<span class="meta-chip intent">🎯 ${escapeHtml(intentDisplayLabel(profile.intent || profile.intentLabel))}</span>`);
+  const interests = (profile.interests || []).slice(0, 4);
+  interests.forEach(t => chips.push(`<span class="meta-chip">${escapeHtml(t)}</span>`));
+  return chips.join('');
+}
+
+/* Undo stack for rewind (last passed profile) */
+let undoStack = [];
+const MAX_UNDO = 5;
+
+function pushUndo(profile, action) {
+  if (!profile || profile.isDemoFallback) return;
+  undoStack.unshift({ profile, action, at: Date.now() });
+  if (undoStack.length > MAX_UNDO) undoStack.length = MAX_UNDO;
+}
+
+function popUndo() {
+  return undoStack.shift() || null;
+}
 
 /** Demo-only credential hash — replace with proper server-side auth in production */
 function hashCredential(str) {
@@ -417,6 +660,40 @@ function applyFilters() {
 }
 
 /* ==========================================================================
+   PRESENCE (ONLINE / ACTIVE USER) TRACKING
+   ========================================================================== */
+function getPresenceMap() {
+  return loadFromStorage(STORAGE_PRESENCE, {});
+}
+
+/** Marks the current logged-in user as active "right now". */
+function touchPresence() {
+  if (!currentUser) return;
+  const presence = getPresenceMap();
+  presence[currentUser.id] = Date.now();
+  saveToStorage(STORAGE_PRESENCE, presence);
+}
+
+function isUserOnline(userId, presenceMap) {
+  const map = presenceMap || getPresenceMap();
+  const ts = map[userId];
+  return !!ts && (Date.now() - ts) < ONLINE_THRESHOLD_MS;
+}
+
+function initPresenceHeartbeat() {
+  touchPresence();
+  clearInterval(presenceHeartbeatTimer);
+  presenceHeartbeatTimer = setInterval(touchPresence, 20000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') touchPresence();
+  });
+  window.addEventListener('beforeunload', () => {
+    // Best-effort: leave the timestamp as-is so the user "expires" out of
+    // the online pool naturally rather than disappearing instantly.
+  });
+}
+
+/* ==========================================================================
    AGE GATE
    ========================================================================== */
 function initAgeGate() {
@@ -584,41 +861,57 @@ function renderCurrentCard() {
     return;
   }
 
-  const verifiedBadge = profile.verified
-    ? '<span class="verified-badge" title="ID Verified" style="display:inline-flex;width:16px;height:16px;background:#3B82F6;color:white;border-radius:50%;font-size:0.65rem;align-items:center;justify-content:center;margin-left:4px;">✓</span>'
-    : '';
-
-  const liveBadge = '<span class="live-user-badge" title="Live registered user">Live</span>';
-  const locationLine = profile.locationDisplay
-    ? `<span class="sim-location">📍 ${escapeHtml(profile.locationDisplay)}</span>`
-    : '';
+  const photos = getProfilePhotos(profile);
+  const presence = getPresenceMap();
+  const online = isUserOnline(profile.id, presence);
+  const activityLabel = online ? 'Online now' : 'Recently active';
+  const quote = profile.promptAnswer || profile.promptQuestion || '';
+  const chipsHtml = buildMetaChipsHtml(profile);
 
   cardStack.innerHTML = `
-    <div class="sim-profile-card" id="currentSimCard">
-      <div class="sim-card-header">
-        <img src="${profile.avatar}" alt="${escapeHtml(profile.name)}" class="sim-avatar" />
-        <div class="sim-details">
-          <h3>${escapeHtml(profile.name)}, ${profile.age} ${verifiedBadge} ${liveBadge}</h3>
-          <p class="sim-meta">${escapeHtml(profile.occupation)} • ${escapeHtml(profile.distance)}</p>
-          ${locationLine}
+    <div class="sim-profile-card" id="currentSimCard" data-profile-id="${escapeHtml(String(profile.id))}">
+      <div id="simGalleryHost"></div>
+      <div class="card-body-below">
+        <div class="sim-prompt prompt-clickable" data-prompt-id="${profile.id}">
+          <div class="sim-prompt-title">${escapeHtml(profile.promptTag || 'Prompt')}</div>
+          <div class="sim-prompt-body">"${escapeHtml(profile.promptQuestion || '')}"</div>
+          <button class="inline-like-btn" onclick="handleInlineLike('${profile.id}')">♥ Like Prompt</button>
         </div>
-        <div class="sim-match-pill">${escapeHtml(profile.matchScore)}</div>
-      </div>
-
-      <div class="sim-prompt prompt-clickable" data-prompt-id="${profile.id}">
-        <div class="sim-prompt-title">${escapeHtml(profile.promptTag)}</div>
-        <div class="sim-prompt-body">"${escapeHtml(profile.promptQuestion)}"</div>
-        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 8px;">${escapeHtml(profile.promptAnswer)}</p>
-        <button class="inline-like-btn" onclick="handleInlineLike('${profile.id}')">♥ Like Prompt</button>
-      </div>
-
-      <div class="sim-actions">
-        <button class="btn sim-btn-pass" onclick="handleSimAction('pass')">Pass</button>
-        <button class="btn sim-btn-comment" onclick="openCommentModal('${profile.id}')">💬 Comment</button>
-        <button class="btn sim-btn-like" onclick="handleSimAction('like')">♥ Send Intentional Like</button>
+        <div class="floating-toolbar" id="simFloatingToolbar">
+          <button type="button" class="ft-btn ft-rewind ${undoStack.length ? '' : 'disabled'}" onclick="handleSimRewind()" title="Rewind" aria-label="Rewind">↺</button>
+          <button type="button" class="ft-btn ft-pass" onclick="handleSimAction('pass')" title="Pass" aria-label="Pass">✕</button>
+          <button type="button" class="ft-btn ft-super" onclick="handleSimAction('super')" title="Super Like" aria-label="Super Like">★</button>
+          <button type="button" class="ft-btn ft-like" onclick="handleSimAction('like')" title="Like" aria-label="Like">♥</button>
+          <button type="button" class="ft-btn ft-boost" onclick="openCommentModal('${profile.id}')" title="Comment" aria-label="Comment">💬</button>
+        </div>
       </div>
     </div>
   `;
+
+  const host = document.getElementById('simGalleryHost');
+  if (host) {
+    const carousel = createPhotoCarousel(photos, { initialIndex: 0 });
+    const meta = document.createElement('div');
+    meta.className = 'gallery-meta-overlay';
+    meta.innerHTML = `
+      <div class="gallery-name-row">
+        <span class="gallery-name">${escapeHtml(profile.name)}, ${profile.age}</span>
+        ${profile.verified ? '<span class="verified-badge" title="ID Verified">✓</span>' : ''}
+        <button type="button" class="gallery-expand-btn" onclick="openFullProfile('${profile.id}')" title="View full profile" aria-label="Expand">↑</button>
+      </div>
+      <div class="gallery-activity">
+        <span class="activity-dot ${online ? '' : 'offline'}"></span>
+        <span>${activityLabel}</span>
+        <span style="opacity:0.7;margin-left:6px;">· ${escapeHtml(profile.matchScore || '')}</span>
+      </div>
+      <div class="gallery-distance">${escapeHtml(profile.occupation || '')} · ${escapeHtml(profile.distance || profile.locationDisplay || '')}</div>
+      <div class="gallery-quote">${escapeHtml(quote)}</div>
+      <div class="gallery-chips">${chipsHtml}</div>
+    `;
+    carousel.root.appendChild(meta);
+    host.appendChild(carousel.root);
+    host._carousel = carousel;
+  }
   updateStatusText();
 }
 
@@ -633,19 +926,41 @@ function handleSimAction(action) {
     return;
   }
 
-  if (action === 'like') {
+  if (action === 'like' || action === 'super') {
     if (card) {
       card.classList.add('swipe-right');
       spawnHeartBurst(card);
     }
+    if (action === 'super') {
+      showToast(`★ Super Like sent to ${currentProfile.name}!`);
+    }
     const isMutual = recordLike(currentProfile, false);
+    pushUndo(currentProfile, action);
     setTimeout(() => {
       triggerMatchCelebration(currentProfile, isMutual);
     }, 280);
-  } else {
+  } else if (action === 'pass') {
     if (card) card.classList.add('swipe-left');
+    pushUndo(currentProfile, 'pass');
     setTimeout(() => advanceProfile(), 320);
   }
+}
+
+function handleSimRewind() {
+  const item = popUndo();
+  if (!item) {
+    showToast('Nothing to rewind. Premium unlocks unlimited rewinds.');
+    return;
+  }
+  // Re-insert profile into feed at current index
+  const exists = filteredProfiles.some(p => String(p.id) === String(item.profile.id));
+  if (!exists) {
+    filteredProfiles.splice(currentProfileIndex, 0, enrichProfileForDisplay(item.profile));
+  } else {
+    currentProfileIndex = Math.max(0, filteredProfiles.findIndex(p => String(p.id) === String(item.profile.id)));
+  }
+  renderCurrentCard();
+  showToast(`Rewound to ${item.profile.name}`);
 }
 
 function handleInlineLike(profileId) {
@@ -720,6 +1035,239 @@ function updateStatusText(custom) {
 }
 
 /* ==========================================================================
+   DYNAMIC HERO CARD ("Featured Member" — replaces hardcoded Sophia card)
+   Priority: currently online/active user > most recently registered user >
+   built-in demo fallback (only ever shown when zero real profiles exist).
+   ========================================================================== */
+function pickHeroProfile() {
+  const pool = allProfiles.filter(p => !currentUser || !isSameUser(currentUser, p));
+  if (!pool.length) return null;
+
+  const presence = getPresenceMap();
+  const online = pool
+    .filter(p => isUserOnline(p.id, presence))
+    .sort((a, b) => (presence[b.id] || 0) - (presence[a.id] || 0));
+  if (online.length) return online[0];
+
+  const byRecent = [...pool].sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
+  return byRecent[0];
+}
+
+function pickStackedProfile(excludeId) {
+  const pool = allProfiles.filter(p =>
+    (!currentUser || !isSameUser(currentUser, p)) && String(p.id) !== String(excludeId)
+  );
+  if (!pool.length) return null;
+
+  const presence = getPresenceMap();
+  const online = pool
+    .filter(p => isUserOnline(p.id, presence))
+    .sort((a, b) => (presence[b.id] || 0) - (presence[a.id] || 0));
+  if (online.length) return online[0];
+
+  const byRecent = [...pool].sort(
+    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+  );
+  return byRecent[0];
+}
+
+function renderHeroCard() {
+  const picked = pickHeroProfile();
+  heroProfile = picked || DEFAULT_HERO_PROFILE;
+  const isDemo = !!heroProfile.isDemoFallback;
+  const enriched = isDemo ? null : enrichProfileForDisplay(heroProfile);
+
+  const stackedPicked = picked ? pickStackedProfile(picked.id) : null;
+  heroStackedProfile = stackedPicked || DEFAULT_STACKED_PROFILE;
+  const stackedIsDemo = !!heroStackedProfile.isDemoFallback;
+
+  const presence = getPresenceMap();
+  const online = !isDemo && isUserOnline(heroProfile.id, presence);
+  const photos = getProfilePhotos(heroProfile);
+
+  // Rebuild hero photo gallery
+  const wrap = document.getElementById('heroPhotoWrap');
+  if (wrap) {
+    wrap.innerHTML = '';
+    const carousel = createPhotoCarousel(photos, { initialIndex: 0 });
+    const meta = document.createElement('div');
+    meta.className = 'gallery-meta-overlay';
+    let locationText;
+    if (isDemo) locationText = heroProfile.locationDisplay;
+    else if (currentUser && enriched) locationText = enriched.distance;
+    else locationText = heroProfile.locationDisplay || 'New member';
+    const matchLabel = isDemo
+      ? (heroProfile.matchScoreDisplay || '96% Match')
+      : (currentUser && enriched ? `${enriched.matchScoreNum}% Match` : 'Featured Member');
+    meta.innerHTML = `
+      <div class="gallery-name-row">
+        <span class="gallery-name" id="heroCardNameAge">${escapeHtml(heroProfile.name)}, ${heroProfile.age}</span>
+        ${heroProfile.verified ? '<span class="verified-badge" id="heroCardVerifiedBadge" title="ID Verified">✓</span>' : '<span class="verified-badge hidden" id="heroCardVerifiedBadge">✓</span>'}
+        <button type="button" class="gallery-expand-btn" id="heroExpandBtn" title="View full profile" aria-label="Expand">↑</button>
+      </div>
+      <div class="gallery-activity" id="heroActivityRow">
+        <span class="activity-dot ${online || isDemo ? '' : 'offline'}" id="heroActivityDot"></span>
+        <span id="heroLiveBadge">${isDemo ? 'Featured' : (online ? 'Online now' : 'Recently active')}</span>
+        <span style="opacity:0.7;margin-left:6px;">· ${escapeHtml(matchLabel)}</span>
+      </div>
+      <div class="gallery-distance" id="heroCardSub">${escapeHtml(heroProfile.occupation || '')} · ${escapeHtml(locationText || '')}</div>
+      <div class="gallery-quote" id="heroCardPromptAnswer">${escapeHtml(heroProfile.promptAnswer || '')}</div>
+      <div class="gallery-chips" id="heroChips">${buildMetaChipsHtml(heroProfile)}</div>
+    `;
+    carousel.root.appendChild(meta);
+    carousel.root.id = 'heroPhotoGallery';
+    wrap.appendChild(carousel.root);
+    wrap._carousel = carousel;
+
+    document.getElementById('heroExpandBtn')?.addEventListener('click', () => {
+      if (heroProfile && !heroProfile.isDemoFallback) openFullProfile(heroProfile.id);
+      else if (heroProfile) openFullProfile('demo_sophia');
+    });
+  }
+
+  // Legacy hidden pill for compatibility
+  const pill = document.getElementById('heroCardMatchPill');
+  if (pill) {
+    if (isDemo) pill.textContent = heroProfile.matchScoreDisplay || '96% Match';
+    else if (currentUser && enriched) pill.textContent = `${enriched.matchScoreNum}% Match`;
+    else pill.textContent = 'Featured Member';
+  }
+
+  const promptBox = document.getElementById('heroCardPromptBox');
+  if (promptBox) promptBox.setAttribute('data-prompt-id', String(heroProfile.id));
+
+  const tag = document.getElementById('heroCardPromptTag');
+  if (tag) tag.textContent = heroProfile.promptTag || 'Prompt';
+
+  const q = document.getElementById('heroCardPromptQuestion');
+  if (q) q.textContent = heroProfile.promptQuestion || '';
+
+  const inlineLikeBtn = document.getElementById('heroInlineLikeBtn');
+  if (inlineLikeBtn) {
+    inlineLikeBtn.classList.remove('liked');
+    inlineLikeBtn.textContent = '♥ Like Prompt';
+  }
+
+  // Stacked (background) card
+  const stackAvatar = document.getElementById('heroStackedAvatar');
+  if (stackAvatar) {
+    stackAvatar.src = getPrimaryAvatar(heroStackedProfile);
+    stackAvatar.alt = `${heroStackedProfile.name} Profile`;
+  }
+  const stackName = document.getElementById('heroStackedNameAge');
+  if (stackName) stackName.textContent = `${heroStackedProfile.name}, ${heroStackedProfile.age}`;
+  const stackSub = document.getElementById('heroStackedSub');
+  if (stackSub) {
+    let stackLocationText;
+    if (stackedIsDemo) stackLocationText = heroStackedProfile.locationDisplay;
+    else if (currentUser) stackLocationText = enrichProfileForDisplay(heroStackedProfile).distance;
+    else stackLocationText = heroStackedProfile.locationDisplay || 'New member';
+    stackSub.textContent = `${heroStackedProfile.occupation} • ${stackLocationText}`;
+  }
+}
+
+function handleHeroAction(action) {
+  if (!heroProfile) return;
+  const card = document.getElementById('heroCardMain');
+
+  if (heroProfile.isDemoFallback) {
+    showToast(action === 'like'
+      ? 'Register your profile to send real intentional likes!'
+      : 'Register your profile to start discovering real members!');
+    document.getElementById('btnHeroRegister')?.click();
+    return;
+  }
+  if (currentUser && isSameUser(currentUser, heroProfile)) {
+    showToast('You cannot interact with your own profile.');
+    return;
+  }
+
+  if (action === 'like' || action === 'super') {
+    if (card) {
+      card.classList.add('swipe-right');
+      spawnHeartBurst(card);
+    }
+    if (action === 'super') showToast(`★ Super Like sent to ${heroProfile.name}!`);
+    const targetProfile = heroProfile;
+    const isMutual = recordLike(targetProfile, false);
+    setTimeout(() => {
+      card?.classList.remove('swipe-right');
+      renderHeroCard();
+      triggerMatchCelebration(targetProfile, isMutual);
+    }, 280);
+  } else {
+    if (card) card.classList.add('swipe-left');
+    showToast(`Passed on ${heroProfile.name}.`);
+    setTimeout(() => {
+      card?.classList.remove('swipe-left');
+      renderHeroCard();
+    }, 320);
+  }
+}
+
+function handleHeroInlineLike() {
+  if (!heroProfile) return;
+  if (heroProfile.isDemoFallback) {
+    showToast('Register your profile to like real prompts and start matching.');
+    document.getElementById('btnHeroRegister')?.click();
+    return;
+  }
+  if (currentUser && isSameUser(currentUser, heroProfile)) {
+    showToast('You cannot like your own prompt.');
+    return;
+  }
+
+  const btn = document.getElementById('heroInlineLikeBtn');
+  if (btn) {
+    btn.classList.add('liked');
+    btn.textContent = '♥ Liked';
+  }
+  const isMutual = recordLike(heroProfile, true);
+  if (isMutual) {
+    showToast(`Mutual prompt connection with ${heroProfile.name}! Messaging unlocked.`);
+    triggerMatchCelebration(heroProfile, true);
+  } else {
+    showToast(`You liked ${heroProfile.name}'s prompt!`);
+  }
+}
+
+function handleHeroComment() {
+  if (!heroProfile) return;
+  if (heroProfile.isDemoFallback) {
+    showToast('Register your profile to comment on real members.');
+    document.getElementById('btnHeroRegister')?.click();
+    return;
+  }
+  openCommentModal(heroProfile.id);
+}
+
+function initHeroCard() {
+  renderHeroCard();
+
+  document.getElementById('heroBtnLike')?.addEventListener('click', () => handleHeroAction('like'));
+  document.getElementById('heroBtnPass')?.addEventListener('click', () => handleHeroAction('pass'));
+  document.getElementById('heroBtnSuper')?.addEventListener('click', () => handleHeroAction('super'));
+  document.getElementById('heroBtnBoost')?.addEventListener('click', () => {
+    if (heroProfile && !heroProfile.isDemoFallback) openCommentModal(heroProfile.id);
+    else showToast('Register to message real members.');
+  });
+  document.getElementById('heroBtnRewind')?.addEventListener('click', () => {
+    showToast('Rewind is available in the discovery feed. Premium unlocks unlimited rewinds.');
+  });
+  document.getElementById('heroInlineLikeBtn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    handleHeroInlineLike();
+  });
+
+  clearInterval(heroRefreshTimer);
+  heroRefreshTimer = setInterval(renderHeroCard, 30000);
+
+  initFullProfileDrawer();
+}
+
+/* ==========================================================================
    MATCH CELEBRATION
    ========================================================================== */
 function initMatchModal() {
@@ -756,9 +1304,9 @@ function triggerMatchCelebration(profile, isMutual = false) {
   const btnStartChat = document.getElementById('btnStartChatFromMatch');
 
   if (matchNameHeading) matchNameHeading.innerText = `You & ${profile.name} Connected!`;
-  if (matchTargetAvatar) matchTargetAvatar.src = profile.avatar;
+  if (matchTargetAvatar) matchTargetAvatar.src = getPrimaryAvatar(profile);
   if (currentUser && userAvatar) {
-    userAvatar.src = currentUser.avatar;
+    userAvatar.src = getPrimaryAvatar(currentUser);
   } else if (userAvatar) {
     userAvatar.src = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80';
   }
@@ -875,8 +1423,12 @@ function initRegistration() {
     allProfiles = registered.filter(p => !p.isMock);
     applyFilters();
     renderCurrentCard();
+    touchPresence();
+    renderHeroCard();
     updateUIForUser();
     updateSimLocationLabel();
+    pendingRegPhotos = [];
+    renderRegPhotoGrid();
     close();
     showToast(`Welcome, ${profile.name}! Your profile is live and discoverable.`);
     if (submitBtn) {
@@ -968,6 +1520,11 @@ function buildProfileFromForm() {
   const email = document.getElementById('regEmail').value.trim().toLowerCase();
   const password = document.getElementById('regPassword').value;
 
+  const photos = pendingRegPhotos.length
+    ? pendingRegPhotos.slice(0, MAX_PROFILE_PHOTOS)
+    : [avatar];
+  const primary = photos[0] || avatar;
+
   return {
     id: 'usr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
     name,
@@ -978,7 +1535,10 @@ function buildProfileFromForm() {
     matchScore: '—',
     intent,
     verified,
-    avatar,
+    avatar: primary,
+    photos,
+    interests: [],
+    basics: [],
     promptTag,
     promptQuestion,
     promptAnswer,
@@ -1056,6 +1616,8 @@ function initLogin() {
       allProfiles = registered.filter(p => !p.isMock);
       applyFilters();
       renderCurrentCard();
+      touchPresence();
+      renderHeroCard();
       updateUIForUser();
       updateSimLocationLabel();
       modal.classList.add('hidden');
@@ -1115,6 +1677,7 @@ function initManageProfile() {
       allProfiles = registered.filter(p => !p.isMock);
       applyFilters();
       renderCurrentCard();
+      renderHeroCard();
       updateUIForUser();
       eraseModal.classList.add('hidden');
       document.getElementById('manageProfilePanel')?.classList.add('hidden');
@@ -1188,6 +1751,7 @@ function saveEditedProfile() {
   allProfiles = registered.filter(p => !p.isMock);
   applyFilters();
   renderCurrentCard();
+  renderHeroCard();
   updateUIForUser();
   document.getElementById('editProfileModal')?.classList.add('hidden');
   showToast('Profile updated successfully.');
@@ -1195,12 +1759,14 @@ function saveEditedProfile() {
 
 function logoutUser() {
   stopChatPolling();
+  clearInterval(presenceHeartbeatTimer);
   localStorage.removeItem(STORAGE_CURRENT_USER);
   localStorage.removeItem(STORAGE_SESSION);
   currentUser = null;
   activeChatMatchId = null;
   applyFilters();
   renderCurrentCard();
+  renderHeroCard();
   updateUIForUser();
   showToast('You have been logged out.');
 }
@@ -1813,6 +2379,10 @@ function initRealtimeSync() {
       allProfiles = loadFromStorage(STORAGE_PROFILES, []).filter(p => !p.isMock);
       applyFilters();
       renderCurrentCard();
+      renderHeroCard();
+    }
+    if (e.key === STORAGE_PRESENCE) {
+      renderHeroCard();
     }
   });
 }
@@ -1870,14 +2440,9 @@ function initFeatureModules() {
     });
   }
 
-  document.querySelectorAll('.proto-prompt-box .inline-like-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      btn.classList.add('liked');
-      btn.textContent = '♥ Liked';
-      showToast("You liked Sophia's prompt!");
-    });
-  });
+  // Note: the hero prototype card's "Like Prompt" button is wired dynamically
+  // in initHeroCard() / handleHeroInlineLike() since it now binds to a real,
+  // live-registered profile rather than static demo copy.
 }
 
 /* ==========================================================================
@@ -2076,15 +2641,9 @@ function initComments() {
     });
   }
 
-  // Hero prototype comment button
-  document.querySelectorAll('.proto-btn.btn-comment').forEach(btn => {
-    btn.addEventListener('click', () => {
-      // Demo: open comment on the hero Sophia-style card if no live profile
-      const first = filteredProfiles[0] || allProfiles[0];
-      if (first) openCommentModal(first.id);
-      else showToast('Register or discover a profile to leave a comment.');
-    });
-  });
+  // Note: the hero prototype card's Comment button is wired dynamically in
+  // initHeroCard() / handleHeroComment() since it now targets whichever real
+  // profile is currently featured, not a fixed demo profile.
 }
 
 function openCommentModal(profileId) {
@@ -2202,6 +2761,200 @@ function postComment() {
   showToast(`Comment posted on ${profile.name}'s profile.`);
 }
 
+
+/* ==========================================================================
+   FULL PROFILE DRAWER
+   ========================================================================== */
+let activeFullProfileId = null;
+
+function initFullProfileDrawer() {
+  const drawer = document.getElementById('fullProfileDrawer');
+  document.getElementById('btnCloseFullProfile')?.addEventListener('click', closeFullProfile);
+  drawer?.addEventListener('click', (e) => {
+    if (e.target === drawer) closeFullProfile();
+  });
+  document.getElementById('fpBtnLike')?.addEventListener('click', () => {
+    const p = resolveProfileById(activeFullProfileId);
+    if (p) { closeFullProfile(); recordLike(p, false); triggerMatchCelebration(p, false); }
+  });
+  document.getElementById('fpBtnSuper')?.addEventListener('click', () => {
+    const p = resolveProfileById(activeFullProfileId);
+    if (p) { closeFullProfile(); showToast(`★ Super Like sent to ${p.name}!`); recordLike(p, false); triggerMatchCelebration(p, false); }
+  });
+  document.getElementById('fpBtnPass')?.addEventListener('click', () => {
+    closeFullProfile();
+    handleSimAction('pass');
+  });
+  document.getElementById('fpBtnComment')?.addEventListener('click', () => {
+    const id = activeFullProfileId;
+    closeFullProfile();
+    if (id) openCommentModal(id);
+  });
+}
+
+function resolveProfileById(id) {
+  if (!id) return null;
+  if (String(id) === 'demo_sophia') return DEFAULT_HERO_PROFILE;
+  return allProfiles.find(p => String(p.id) === String(id))
+    || filteredProfiles.find(p => String(p.id) === String(id))
+    || (heroProfile && String(heroProfile.id) === String(id) ? heroProfile : null);
+}
+
+function openFullProfile(profileId) {
+  const profile = resolveProfileById(profileId);
+  if (!profile) {
+    showToast('Profile not found.');
+    return;
+  }
+  if (currentUser && isSameUser(currentUser, profile) && !profile.isDemoFallback) {
+    showToast('This is your profile.');
+    return;
+  }
+  activeFullProfileId = profile.id;
+  const enriched = profile.isDemoFallback ? profile : enrichProfileForDisplay(profile);
+  const photos = getProfilePhotos(profile);
+  const host = document.getElementById('fpGalleryHost');
+  if (host) {
+    host.innerHTML = '';
+    const carousel = createPhotoCarousel(photos, { initialIndex: 0, className: 'fp-gallery' });
+    host.appendChild(carousel.root);
+  }
+  document.getElementById('fpName').textContent = `${profile.name}, ${profile.age}`;
+  const dist = enriched.distance || profile.locationDisplay || '';
+  document.getElementById('fpSub').textContent = `${profile.occupation || ''} · ${dist}`;
+  document.getElementById('fpPromptTag').textContent = profile.promptTag || 'Prompt';
+  document.getElementById('fpPromptQ').textContent = profile.promptQuestion || '';
+  document.getElementById('fpPromptA').textContent = profile.promptAnswer || '';
+
+  const interests = profile.interests || ['Lifestyle', 'Conversation', 'Travel'];
+  document.getElementById('fpInterests').innerHTML = interests.map(t =>
+    `<span class="fp-chip">${escapeHtml(t)}</span>`
+  ).join('');
+  const basics = profile.basics || ['🚭 Non-smoker', '🏋️ Sometimes'];
+  document.getElementById('fpBasics').innerHTML = basics.map(t =>
+    `<span class="fp-chip">${escapeHtml(t)}</span>`
+  ).join('');
+  document.getElementById('fpIntent').innerHTML =
+    `<span class="fp-chip">🎯 Looking for: ${escapeHtml(intentDisplayLabel(profile.intent || profile.intentLabel))}</span>`;
+
+  document.getElementById('fullProfileDrawer')?.classList.remove('hidden');
+}
+
+function closeFullProfile() {
+  document.getElementById('fullProfileDrawer')?.classList.add('hidden');
+  activeFullProfileId = null;
+}
+
+/* ==========================================================================
+   CLIENT-SIDE PHOTO UPLOAD & CROP PIPELINE
+   ========================================================================== */
+/** Pending registration photos as data-URLs (compressed). */
+let pendingRegPhotos = [];
+
+/**
+ * Compress & orient image client-side to JPEG/WebP data URL.
+ * Target ~ max edge 1200px, quality 0.82 — approximates CDN 80% WebP step.
+ */
+function processImageFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!file || !file.type.startsWith('image/')) {
+      reject(new Error('Not an image'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const maxEdge = 1200;
+        let { width, height } = img;
+        const scale = Math.min(1, maxEdge / Math.max(width, height));
+        width = Math.round(width * scale);
+        height = Math.round(height * scale);
+        // Crop to 4:5 portrait center
+        const targetRatio = 4 / 5;
+        let sx = 0, sy = 0, sw = img.width, sh = img.height;
+        const srcRatio = img.width / img.height;
+        if (srcRatio > targetRatio) {
+          sw = Math.round(img.height * targetRatio);
+          sx = Math.round((img.width - sw) / 2);
+        } else {
+          sh = Math.round(img.width / targetRatio);
+          sy = Math.round((img.height - sh) / 2);
+        }
+        const canvas = document.createElement('canvas');
+        const outW = Math.min(800, Math.round(sw * scale));
+        const outH = Math.round(outW / targetRatio);
+        canvas.width = outW;
+        canvas.height = outH;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, outW, outH);
+        const mime = (typeof canvas.toDataURL === 'function' && canvas.toDataURL('image/webp').startsWith('data:image/webp'))
+          ? 'image/webp' : 'image/jpeg';
+        resolve(canvas.toDataURL(mime, 0.82));
+      };
+      img.onerror = () => reject(new Error('Image load failed'));
+      img.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error('Read failed'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderRegPhotoGrid() {
+  const grid = document.getElementById('regPhotoGrid');
+  if (!grid) return;
+  const slots = Math.max(pendingRegPhotos.length + 1, 4);
+  const count = Math.min(slots, MAX_PROFILE_PHOTOS);
+  grid.innerHTML = '';
+  for (let i = 0; i < count; i++) {
+    const slot = document.createElement('div');
+    slot.className = 'photo-slot' + (pendingRegPhotos[i] ? '' : ' empty') + (i === 0 && pendingRegPhotos[i] ? ' primary-badge' : '');
+    if (pendingRegPhotos[i]) {
+      const img = document.createElement('img');
+      img.src = pendingRegPhotos[i];
+      img.alt = `Photo ${i + 1}`;
+      slot.appendChild(img);
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'photo-remove';
+      rm.textContent = '✕';
+      rm.addEventListener('click', (e) => {
+        e.stopPropagation();
+        pendingRegPhotos.splice(i, 1);
+        renderRegPhotoGrid();
+      });
+      slot.appendChild(rm);
+    } else {
+      slot.addEventListener('click', () => document.getElementById('regPhotoInput')?.click());
+    }
+    grid.appendChild(slot);
+  }
+}
+
+function initPhotoUploadModule() {
+  const input = document.getElementById('regPhotoInput');
+  if (!input) return;
+  input.addEventListener('change', async () => {
+    const files = Array.from(input.files || []);
+    input.value = '';
+    for (const file of files) {
+      if (pendingRegPhotos.length >= MAX_PROFILE_PHOTOS) {
+        showToast('Maximum 8 photos per profile.');
+        break;
+      }
+      try {
+        const dataUrl = await processImageFile(file);
+        pendingRegPhotos.push(dataUrl);
+      } catch (err) {
+        console.warn('Photo process failed', err);
+        showToast('Could not process one of the images.');
+      }
+    }
+    renderRegPhotoGrid();
+  });
+  renderRegPhotoGrid();
+}
+
 /* ==========================================================================
    UTILITIES
    ========================================================================== */
@@ -2216,9 +2969,11 @@ function showToast(msg) {
 
 window.handleSimAction = handleSimAction;
 window.handleInlineLike = handleInlineLike;
+window.handleSimRewind = handleSimRewind;
 window.resetSim = resetSim;
 window.resetSimFilters = resetSimFilters;
 window.openChatWithMatch = openChatWithMatch;
 window.shareQuincyPlatform = shareQuincyPlatform;
 window.openCommentModal = openCommentModal;
 window.handleLikeItemClick = handleLikeItemClick;
+window.openFullProfile = openFullProfile;

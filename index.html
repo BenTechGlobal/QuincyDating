@@ -52,12 +52,17 @@
         </ul>
 
         <div class="nav-actions">
+          <div id="navUserChip" class="nav-user-chip hidden"></div>
+          <button id="btnOpenLogin" class="btn btn-outline btn-sm">Log In</button>
           <button id="btnOpenRegister" class="btn btn-primary btn-sm btn-glow">Try Demo / Register</button>
           <a href="#community" class="btn btn-secondary btn-sm">Join Group</a>
           <button id="btnOpenLikesDrawer" class="btn btn-outline btn-sm likes-nav-btn" title="Who Liked You">
             ♥ <span id="likesBadge" class="likes-badge hidden">0</span>
           </button>
-          <button id="btnManageProfile" class="btn btn-outline btn-sm hidden">Manage Profile</button>
+          <button id="btnOpenMessages" class="btn btn-outline btn-sm messages-nav-btn hidden" title="Matches & Messages">
+            💬 <span id="messagesBadge" class="likes-badge hidden">0</span>
+          </button>
+          <button id="btnManageProfile" class="btn btn-outline btn-sm hidden">Account</button>
         </div>
       </nav>
     </header>
@@ -411,8 +416,10 @@
         <div class="first-move-indicator hidden" id="firstMoveIndicator">
           <span>You made the first move — they can now reply.</span>
         </div>
+        <div id="mutualMatchBanner" class="first-move-indicator hidden" style="background:rgba(16,185,129,0.15);color:var(--accent-green);border-color:rgba(16,185,129,0.3);"></div>
         <div class="match-modal-actions">
-          <a href="https://chat.whatsapp.com/" target="_blank" rel="noopener" class="btn btn-primary btn-glow">Chat in WhatsApp Community</a>
+          <button id="btnStartChatFromMatch" class="btn btn-primary btn-glow hidden">Start Messaging</button>
+          <a href="https://chat.whatsapp.com/" target="_blank" rel="noopener" class="btn btn-whatsapp">Chat in WhatsApp Community</a>
           <button id="btnCloseMatchModal" class="btn btn-outline">Keep Exploring Demo</button>
         </div>
       </div>
@@ -498,10 +505,24 @@
             <span class="field-error" id="errPromptAnswer"></span>
           </div>
 
+          <div class="form-row">
+            <div class="form-group">
+              <label for="regEmail">Email *</label>
+              <input type="email" id="regEmail" name="email" required placeholder="you@example.com" />
+              <span class="field-error" id="errEmail"></span>
+            </div>
+            <div class="form-group">
+              <label for="regPassword">Password *</label>
+              <input type="password" id="regPassword" name="password" required minlength="6" placeholder="Min 6 characters" />
+              <span class="field-error" id="errPassword"></span>
+            </div>
+          </div>
+
           <div class="form-actions">
             <button type="button" id="btnCancelRegister" class="btn btn-outline">Cancel</button>
             <button type="submit" class="btn btn-primary btn-glow">Create Profile</button>
           </div>
+          <p class="modal-switch-text">Already have an account? <a href="#" id="switchToLogin">Log in</a></p>
         </form>
       </div>
     </div>
@@ -529,6 +550,140 @@
           <!-- Populated by JS -->
         </div>
         <p id="likesEmpty" class="likes-empty hidden">No likes yet. Keep exploring and send intentional likes!</p>
+      </div>
+    </div>
+
+    <!-- Login Modal -->
+    <div id="loginModal" class="match-modal-overlay hidden">
+      <div class="match-modal-card glass-panel register-modal-card">
+        <h2>Welcome Back</h2>
+        <p class="modal-sub">Log in to access your matches and messages.</p>
+        <form id="loginForm" class="register-form" novalidate>
+          <div class="form-group">
+            <label for="loginEmail">Email</label>
+            <input type="email" id="loginEmail" required placeholder="you@example.com" />
+          </div>
+          <div class="form-group">
+            <label for="loginPassword">Password</label>
+            <input type="password" id="loginPassword" required placeholder="Your password" />
+          </div>
+          <p id="loginError" class="field-error" style="text-align:center;"></p>
+          <div class="form-actions">
+            <button type="button" id="btnCancelLogin" class="btn btn-outline">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-glow">Log In</button>
+          </div>
+          <p class="modal-switch-text">New here? <a href="#" id="switchToRegister">Create a profile</a></p>
+        </form>
+      </div>
+    </div>
+
+    <!-- Edit Profile Modal -->
+    <div id="editProfileModal" class="match-modal-overlay hidden">
+      <div class="match-modal-card glass-panel register-modal-card">
+        <h2>Edit Your Profile</h2>
+        <p class="modal-sub">Update how you appear to intentional matches.</p>
+        <div class="register-form">
+          <div class="form-row">
+            <div class="form-group">
+              <label for="editName">Name *</label>
+              <input type="text" id="editName" maxlength="40" />
+            </div>
+            <div class="form-group">
+              <label for="editAge">Age *</label>
+              <input type="number" id="editAge" min="18" max="99" />
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="editOccupation">Occupation *</label>
+            <input type="text" id="editOccupation" maxlength="60" />
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label for="editIntent">Relationship Intent *</label>
+              <select id="editIntent">
+                <option value="marriage">Marriage</option>
+                <option value="long-term">Long-Term</option>
+                <option value="verified">Verified Connections</option>
+              </select>
+            </div>
+            <div class="form-group form-group-checkbox">
+              <label class="checkbox-label">
+                <input type="checkbox" id="editVerified" />
+                <span>ID Verified</span>
+              </label>
+            </div>
+          </div>
+          <div class="form-group">
+            <label for="editAvatar">Avatar Image URL</label>
+            <input type="url" id="editAvatar" />
+          </div>
+          <div class="form-group">
+            <label for="editPromptTag">Prompt Tag</label>
+            <select id="editPromptTag">
+              <option value="Relationship Goal">Relationship Goal</option>
+              <option value="Sunday Vibe">Sunday Vibe</option>
+              <option value="Green Flags I Look For">Green Flags I Look For</option>
+              <option value="Dating Intent">Dating Intent</option>
+              <option value="Non-Negotiable">Non-Negotiable</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="editPromptQuestion">Prompt Question *</label>
+            <input type="text" id="editPromptQuestion" maxlength="120" />
+          </div>
+          <div class="form-group">
+            <label for="editPromptAnswer">Your Answer *</label>
+            <textarea id="editPromptAnswer" rows="3" maxlength="280"></textarea>
+          </div>
+          <div class="form-actions">
+            <button type="button" id="btnCancelEditProfile" class="btn btn-outline">Cancel</button>
+            <button type="button" id="btnSaveEditProfile" class="btn btn-primary btn-glow">Save Changes</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Manage Profile Panel -->
+    <div id="manageProfilePanel" class="match-modal-overlay hidden">
+      <div class="match-modal-card glass-panel" style="max-width:400px;">
+        <h2>Your Account</h2>
+        <p class="modal-sub">Manage your Quincy presence.</p>
+        <div class="match-modal-actions">
+          <button id="btnEditProfile" class="btn btn-primary">Edit Profile</button>
+          <button id="btnLogout" class="btn btn-outline">Log Out</button>
+          <button id="btnEraseFromManage" class="btn btn-outline" style="color:#EF4444;border-color:rgba(239,68,68,0.4);">Erase Profile Permanently</button>
+          <button id="btnCloseManagePanel" class="btn btn-outline">Close</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Messages Drawer -->
+    <div id="messagesDrawer" class="likes-drawer hidden">
+      <div class="likes-drawer-panel glass-panel messages-panel">
+        <div id="matchesListView">
+          <div class="likes-drawer-header">
+            <h3>Matches & Messages</h3>
+            <button id="btnCloseMessages" class="btn btn-outline btn-sm">Close</button>
+          </div>
+          <div id="matchesList" class="likes-list">
+            <!-- Populated by JS -->
+          </div>
+          <p id="matchesEmpty" class="likes-empty hidden">No matches yet. Send intentional likes to start conversations!</p>
+        </div>
+        <div id="chatView" class="hidden">
+          <div class="chat-header">
+            <button id="btnBackToMatches" class="btn btn-outline btn-sm">← Back</button>
+            <div class="chat-partner">
+              <img id="chatPartnerAvatar" src="" alt="" class="chat-partner-avatar" />
+              <h3 id="chatPartnerName">Partner</h3>
+            </div>
+          </div>
+          <div id="chatMessages" class="chat-messages"></div>
+          <form id="chatForm" class="chat-form">
+            <input type="text" id="chatInput" placeholder="Write an intentional message..." maxlength="500" autocomplete="off" />
+            <button type="submit" class="btn btn-primary btn-sm">Send</button>
+          </form>
+        </div>
       </div>
     </div>
 

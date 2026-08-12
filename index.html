@@ -119,39 +119,54 @@
 
         <div class="hero-visual">
           <div class="figma-prototype-stage">
-            <div class="proto-card card-main glass-panel animated-float">
-              <div class="proto-card-header">
-                <img src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80" alt="Sophia Profile" class="proto-avatar" />
-                <div class="proto-user-info">
-                  <div class="proto-name-row">
-                    <h3>Sophia, 27</h3>
-                    <span class="verified-badge" title="ID Verified">✓</span>
+            <div class="proto-card card-main glass-panel animated-float" id="heroCardMain">
+              <div class="hero-photo-wrap" id="heroPhotoWrap">
+                <!-- Dynamic multi-photo gallery injected by JS -->
+                <div class="photo-gallery" id="heroPhotoGallery" data-carousel="hero">
+                  <div class="story-progress" id="heroStoryProgress"></div>
+                  <img class="photo-gallery-img active" id="heroCardAvatar" src="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=800&q=80" alt="Featured Profile" />
+                  <div class="gallery-tap-zone gallery-tap-left" data-dir="prev" aria-label="Previous photo"></div>
+                  <div class="gallery-tap-zone gallery-tap-right" data-dir="next" aria-label="Next photo"></div>
+                  <div class="gallery-meta-overlay" id="heroMetaOverlay">
+                    <div class="gallery-name-row">
+                      <span class="gallery-name" id="heroCardNameAge">Sophia, 27</span>
+                      <span class="verified-badge" id="heroCardVerifiedBadge" title="ID Verified">✓</span>
+                      <button type="button" class="gallery-expand-btn" id="heroExpandBtn" title="View full profile" aria-label="Expand profile">↑</button>
+                    </div>
+                    <div class="gallery-activity" id="heroActivityRow">
+                      <span class="activity-dot" id="heroActivityDot"></span>
+                      <span id="heroLiveBadge">Online now</span>
+                    </div>
+                    <div class="gallery-distance" id="heroCardSub">Architect • 2.4 miles away</div>
+                    <div class="gallery-quote" id="heroCardPromptAnswer">Farmers market espresso run, design sketching in the park, and cooking pasta from scratch with someone who loves good conversation.</div>
+                    <div class="gallery-chips" id="heroChips"></div>
                   </div>
-                  <p class="proto-sub">Architect • 2.4 miles away</p>
                 </div>
-                <div class="match-score-pill">96% Match</div>
               </div>
-
-              <div class="proto-prompt-box prompt-clickable" data-prompt-id="hero-1">
-                <span class="prompt-tag">Dating Intent</span>
-                <p class="prompt-question">My non-negotiable Sunday ritual...</p>
-                <p class="prompt-answer">Farmers market espresso run, design sketching in the park, and cooking pasta from scratch with someone who loves good conversation.</p>
-                <button class="inline-like-btn" title="Like this prompt">♥ Like Prompt</button>
+              <div class="card-body-below">
+                <div class="proto-prompt-box prompt-clickable" id="heroCardPromptBox" data-prompt-id="hero-1">
+                  <span class="prompt-tag" id="heroCardPromptTag">Dating Intent</span>
+                  <p class="prompt-question" id="heroCardPromptQuestion">My non-negotiable Sunday ritual...</p>
+                  <button class="inline-like-btn" id="heroInlineLikeBtn" title="Like this prompt">♥ Like Prompt</button>
+                </div>
+                <div class="floating-toolbar" id="heroFloatingToolbar">
+                  <button type="button" class="ft-btn ft-rewind" id="heroBtnRewind" title="Rewind" aria-label="Rewind">↺</button>
+                  <button type="button" class="ft-btn ft-pass" id="heroBtnPass" title="Pass" aria-label="Pass">✕</button>
+                  <button type="button" class="ft-btn ft-super" id="heroBtnSuper" title="Super Like" aria-label="Super Like">★</button>
+                  <button type="button" class="ft-btn ft-like" id="heroBtnLike" title="Like" aria-label="Like">♥</button>
+                  <button type="button" class="ft-btn ft-boost" id="heroBtnBoost" title="Boost / Message" aria-label="Boost">✈</button>
+                </div>
               </div>
-
-              <div class="proto-actions">
-                <button class="proto-btn btn-pass" aria-label="Pass">✕</button>
-                <button class="proto-btn btn-comment" aria-label="Comment">💬 Comment</button>
-                <button class="proto-btn btn-like" aria-label="Like">♥</button>
-              </div>
+              <!-- Hidden legacy fields for JS compatibility -->
+              <span id="heroCardMatchPill" class="hidden">96% Match</span>
             </div>
 
-            <div class="proto-card card-stacked glass-panel">
+            <div class="proto-card card-stacked glass-panel" id="heroCardStacked">
               <div class="proto-card-header">
-                <img src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80" alt="Julian Profile" class="proto-avatar" />
+                <img id="heroStackedAvatar" src="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80" alt="Next Profile" class="proto-avatar" />
                 <div>
-                  <h3>Julian, 29</h3>
-                  <p class="proto-sub">Product Designer • 1.8 miles away</p>
+                  <h3 id="heroStackedNameAge">Julian, 29</h3>
+                  <p class="proto-sub" id="heroStackedSub">Product Designer • 1.8 miles away</p>
                 </div>
               </div>
             </div>
@@ -472,8 +487,8 @@
           </div>
 
           <div class="form-group">
-            <label for="regAvatar">Avatar Image URL</label>
-            <input type="url" id="regAvatar" name="avatar" placeholder="https://... or leave blank for preset" />
+            <label for="regAvatar">Primary Photo URL (optional)</label>
+            <input type="url" id="regAvatar" name="avatar" placeholder="https://... or upload below" />
             <div class="avatar-presets">
               <button type="button" class="avatar-preset" data-url="https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80">1</button>
               <button type="button" class="avatar-preset" data-url="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80">2</button>
@@ -481,6 +496,15 @@
               <button type="button" class="avatar-preset" data-url="https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=300&q=80">4</button>
             </div>
             <span class="field-error" id="errAvatar"></span>
+          </div>
+
+          <div class="form-group">
+            <label>Photo Gallery (up to 8)</label>
+            <div class="photo-upload-manager">
+              <input type="file" id="regPhotoInput" accept="image/*" multiple class="hidden" />
+              <div class="photo-upload-grid" id="regPhotoGrid"></div>
+              <p class="photo-upload-hint">Tap a slot to add a photo. First photo is primary. Max 8 images.</p>
+            </div>
           </div>
 
           <div class="form-group">
@@ -744,6 +768,48 @@
             <button type="submit" class="btn btn-primary btn-glow">Post Comment</button>
           </div>
         </form>
+      </div>
+    </div>
+
+
+    <!-- Full Profile Drawer -->
+    <div id="fullProfileDrawer" class="full-profile-drawer hidden" role="dialog" aria-modal="true" aria-labelledby="fpName">
+      <div class="full-profile-panel glass-panel">
+        <div class="fp-header">
+          <h3 style="font-size:1rem;font-weight:700;">Profile</h3>
+          <button type="button" class="fp-close" id="btnCloseFullProfile" aria-label="Close">✕</button>
+        </div>
+        <div id="fpGalleryHost"></div>
+        <div class="fp-body">
+          <h2 class="fp-name" id="fpName">Name, 00</h2>
+          <p class="fp-sub" id="fpSub"></p>
+          <div class="fp-section">
+            <h4>About</h4>
+            <div class="fp-prompt-block">
+              <div class="fp-prompt-tag" id="fpPromptTag"></div>
+              <div class="fp-prompt-q" id="fpPromptQ"></div>
+              <div class="fp-prompt-a" id="fpPromptA"></div>
+            </div>
+          </div>
+          <div class="fp-section">
+            <h4>Interests</h4>
+            <div class="fp-chips" id="fpInterests"></div>
+          </div>
+          <div class="fp-section">
+            <h4>Basics & Lifestyle</h4>
+            <div class="fp-chips" id="fpBasics"></div>
+          </div>
+          <div class="fp-section">
+            <h4>Looking for</h4>
+            <div class="fp-chips" id="fpIntent"></div>
+          </div>
+          <div class="floating-toolbar" id="fpToolbar" style="margin-top:8px;">
+            <button type="button" class="ft-btn ft-pass" id="fpBtnPass" aria-label="Pass">✕</button>
+            <button type="button" class="ft-btn ft-super" id="fpBtnSuper" aria-label="Super Like">★</button>
+            <button type="button" class="ft-btn ft-like" id="fpBtnLike" aria-label="Like">♥</button>
+            <button type="button" class="ft-btn ft-boost" id="fpBtnComment" aria-label="Comment">💬</button>
+          </div>
+        </div>
       </div>
     </div>
 

@@ -56,6 +56,9 @@
           <button id="btnOpenLogin" class="btn btn-outline btn-sm">Log In</button>
           <button id="btnOpenRegister" class="btn btn-primary btn-sm btn-glow">Try Demo / Register</button>
           <a href="#community" class="btn btn-secondary btn-sm">Join Group</a>
+          <button id="btnSharePlatform" class="btn btn-outline btn-sm" title="Share Quincy">
+            ↗ Share
+          </button>
           <button id="btnOpenLikesDrawer" class="btn btn-outline btn-sm likes-nav-btn" title="Who Liked You">
             ♥ <span id="likesBadge" class="likes-badge hidden">0</span>
           </button>
@@ -234,8 +237,8 @@
 
             <!-- Interactive Distance Slider -->
             <div class="feature-interactive">
-              <label class="slider-label" for="proximitySlider">Proximity Radar: <span id="proximityValue">10</span> miles</label>
-              <input type="range" id="proximitySlider" class="proximity-slider" min="1" max="25" value="10" />
+              <label class="slider-label" for="proximitySlider">Proximity Radar: <span id="proximityValue">25</span> miles</label>
+              <input type="range" id="proximitySlider" class="proximity-slider" min="1" max="100" value="25" />
               <div class="radar-visual">
                 <div class="radar-ring" style="--r:30%"></div>
                 <div class="radar-ring" style="--r:60%"></div>
@@ -684,6 +687,46 @@
             <button type="submit" class="btn btn-primary btn-sm">Send</button>
           </form>
         </div>
+      </div>
+    </div>
+
+    <!-- Share Fallback Modal (Web Share API unsupported browsers) -->
+    <div id="shareModal" class="match-modal-overlay hidden">
+      <div class="match-modal-card glass-panel share-modal-card">
+        <h2>Share Quincy</h2>
+        <p class="modal-sub">Invite intentional singles to join the platform.</p>
+        <div class="share-options-grid">
+          <button type="button" id="shareWhatsApp" class="share-option-btn share-whatsapp">
+            <span class="share-icon">💬</span>
+            <span>WhatsApp</span>
+          </button>
+          <button type="button" id="shareFacebook" class="share-option-btn share-facebook">
+            <span class="share-icon">📘</span>
+            <span>Facebook</span>
+          </button>
+          <button type="button" id="shareTwitter" class="share-option-btn share-twitter">
+            <span class="share-icon">𝕏</span>
+            <span>X / Twitter</span>
+          </button>
+          <button type="button" id="shareCopyLink" class="share-option-btn share-copy">
+            <span class="share-icon">🔗</span>
+            <span>Copy Link</span>
+          </button>
+        </div>
+        <button id="btnCloseShareModal" class="btn btn-outline" style="margin-top:20px;width:100%;">Close</button>
+      </div>
+    </div>
+
+    <!-- Manual Location Fallback Modal -->
+    <div id="locationFallbackModal" class="match-modal-overlay hidden">
+      <div class="match-modal-card glass-panel" style="max-width:440px;">
+        <h2>Set Your Location</h2>
+        <p class="modal-sub">Location access was denied or unavailable. Pick a city so others can discover you by proximity, or retry browser geolocation.</p>
+        <button id="btnRetryGeolocation" class="btn btn-primary btn-glow" style="width:100%;margin-bottom:16px;">🔄 Retry Device Location</button>
+        <div id="locationPresetList" class="location-preset-list">
+          <!-- Populated by JS -->
+        </div>
+        <button id="btnCloseLocationFallback" class="btn btn-outline" style="margin-top:16px;width:100%;">Skip for now</button>
       </div>
     </div>
 

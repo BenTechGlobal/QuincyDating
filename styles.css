@@ -1384,12 +1384,10 @@ a {
 }
 
 /* Card Animations for Pass / Like */
-.sim-profile-card.swipe-left,
-.card-main.swipe-left {
+.sim-profile-card.swipe-left {
   animation: swipeLeft 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
-.sim-profile-card.swipe-right,
-.card-main.swipe-right {
+.sim-profile-card.swipe-right {
   animation: swipeRight 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 @keyframes swipeLeft {

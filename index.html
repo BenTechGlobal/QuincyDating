@@ -274,11 +274,22 @@
 
         <div class="simulator-wrapper glass-panel">
           <div class="simulator-controls">
-            <span class="sim-label">Simulated Location: <strong>New York, NY</strong></span>
-            <div class="sim-filter-group">
-              <button class="sim-filter active" data-filter="all">All Intentions</button>
-              <button class="sim-filter" data-filter="marriage">Long-Term</button>
-              <button class="sim-filter" data-filter="verified">Verified Only</button>
+            <div class="sim-controls-top">
+              <span class="sim-label">Discovery Feed · <strong id="simLocationLabel">Your area</strong></span>
+              <div class="sim-filter-group">
+                <button class="sim-filter active" data-filter="all">All</button>
+                <button class="sim-filter" data-filter="marriage">Long-Term</button>
+                <button class="sim-filter" data-filter="verified">Verified</button>
+              </div>
+            </div>
+            <div class="sim-search-row">
+              <input type="search" id="simSearchInput" class="sim-search-input" placeholder="Search occupation, prompt keywords…" autocomplete="off" />
+              <div class="sim-age-range">
+                <label for="simAgeMin">Age</label>
+                <input type="number" id="simAgeMin" min="18" max="99" value="18" class="sim-age-input" title="Min age" />
+                <span>–</span>
+                <input type="number" id="simAgeMax" min="18" max="99" value="99" class="sim-age-input" title="Max age" />
+              </div>
             </div>
           </div>
 
@@ -408,9 +419,9 @@
         </div>
         <div id="mutualMatchBanner" class="first-move-indicator hidden" style="background:rgba(16,185,129,0.15);color:var(--accent-green);border-color:rgba(16,185,129,0.3);"></div>
         <div class="match-modal-actions">
-          <button id="btnStartChatFromMatch" class="btn btn-primary btn-glow hidden">Start Messaging</button>
-          <a href="https://chat.whatsapp.com/" target="_blank" rel="noopener" class="btn btn-whatsapp">Chat in WhatsApp Community</a>
-          <button id="btnCloseMatchModal" class="btn btn-outline">Keep Exploring Demo</button>
+          <button id="btnStartChatFromMatch" class="btn btn-primary btn-glow hidden">💬 Chat / Message</button>
+          <button id="btnCloseMatchModal" class="btn btn-outline">Keep Exploring</button>
+          <a href="https://chat.whatsapp.com/" target="_blank" rel="noopener" class="btn btn-whatsapp btn-sm" style="margin-top:4px;">Or join WhatsApp Community</a>
         </div>
       </div>
     </div>
@@ -712,6 +723,27 @@
         <button id="btnRetryGeolocation" class="btn btn-primary btn-glow" style="width:100%;margin-bottom:16px;">🔄 Retry Device Location</button>
         <div id="locationPresetList" class="location-preset-list"></div>
         <button id="btnCloseLocationFallback" class="btn btn-outline" style="margin-top:16px;width:100%;">Skip for now</button>
+      </div>
+    </div>
+
+    <!-- Profile Comment Modal -->
+    <div id="commentModal" class="match-modal-overlay hidden">
+      <div class="match-modal-card glass-panel register-modal-card" style="max-width:480px;">
+        <h2>Comment on Profile</h2>
+        <p class="modal-sub" id="commentModalSub">Leave an intentional note about this profile or prompt.</p>
+        <div id="commentTargetInfo" class="comment-target-info"></div>
+        <div id="existingComments" class="existing-comments"></div>
+        <form id="commentForm" class="register-form">
+          <div class="form-group">
+            <label for="commentText">Your comment *</label>
+            <textarea id="commentText" rows="3" maxlength="400" placeholder="Share a thoughtful reaction or question…" required></textarea>
+            <span class="field-error" id="errComment"></span>
+          </div>
+          <div class="form-actions">
+            <button type="button" id="btnCancelComment" class="btn btn-outline">Cancel</button>
+            <button type="submit" class="btn btn-primary btn-glow">Post Comment</button>
+          </div>
+        </form>
       </div>
     </div>
 

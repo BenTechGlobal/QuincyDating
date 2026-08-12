@@ -1,0 +1,137 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum RelationshipIntent {
+  marriage
+  long_term
+  verified
+}
+
+enum MatchStatus {
+  ACTIVE
+  UNMATCHED
+  BLOCKED
+}
+
+model User {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  status       UserStatus @default(ACTIVE)
+  verified     Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+  lastActiveAt DateTime?
+
+  profile       Profile?
+  refreshTokens RefreshToken[]
+  sentLikes     Like[]         @relation("LikeSender")
+  receivedLikes Like[]         @relation("LikeReceiver")
+  matchesAsA    Match[]        @relation("MatchUserA")
+  matchesAsB    Match[]        @relation("MatchUserB")
+  messages      Message[]
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+model Profile {
+  id                 String              @id @default(cuid())
+  userId             String              @unique
+  displayName        String
+  age                Int
+  occupation         String?
+  relationshipIntent RelationshipIntent?
+  latitude           Float?
+  longitude          Float?
+  city               String?
+  country            String?
+  promptTag          String?
+  promptQuestion     String?
+  promptAnswer       String?
+  interests          String[]            @default([])
+  basics             String[]            @default([])
+  avatarUrl          String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  photos Photo[]
+
+  @@index([age])
+}
+
+model Photo {
+  id        String   @id @default(cuid())
+  profileId String
+  photoUrl  String
+  position  Int
+  isPrimary Boolean  @default(false)
+  createdAt DateTime @default(now())
+  profile   Profile  @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, position])
+}
+
+model Like {
+  id           String   @id @default(cuid())
+  senderId     String
+  receiverId   String
+  isPromptOnly Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  sender       User     @relation("LikeSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver     User     @relation("LikeReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, receiverId])
+  @@index([receiverId])
+}
+
+model Match {
+  id        String      @id @default(cuid())
+  userAId   String
+  userBId   String
+  status    MatchStatus @default(ACTIVE)
+  createdAt DateTime    @default(now())
+  userA     User        @relation("MatchUserA", fields: [userAId], references: [id], onDelete: Cascade)
+  userB     User        @relation("MatchUserB", fields: [userBId], references: [id], onDelete: Cascade)
+  messages  Message[]
+
+  @@unique([userAId, userBId])
+  @@index([userAId])
+  @@index([userBId])
+}
+
+model Message {
+  id        String    @id @default(cuid())
+  matchId   String
+  senderId  String
+  content   String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+  match     Match     @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  sender    User      @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@index([matchId, createdAt])
+}

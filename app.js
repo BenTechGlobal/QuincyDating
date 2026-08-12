@@ -19,6 +19,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initMessages();
   initShareModule();
   initLocationFallback();
+  initComments();
   initRealtimeSync();
   updateUIForUser();
 });
@@ -33,6 +34,7 @@ const STORAGE_MATCHES = 'quincy_matches';
 const STORAGE_MESSAGES = 'quincy_messages';
 const STORAGE_SESSION = 'quincy_session_token';
 const STORAGE_TYPING = 'quincy_typing';
+const STORAGE_COMMENTS = 'quincy_profile_comments';
 
 const StorageAdapter = {
   async get(key, fallback) {
@@ -78,6 +80,10 @@ let activeChatMatchId = null;
 let preferredUnit = 'miles';
 let chatPollTimer = null;
 let typingClearTimer = null;
+let searchQuery = '';
+let ageMin = 18;
+let ageMax = 99;
+let activeCommentProfileId = null;
 
 /** Demo-only credential hash — replace with proper server-side auth in production */
 function hashCredential(str) {
@@ -343,11 +349,20 @@ function initState() {
 }
 
 function applyFilters() {
+  const q = (searchQuery || '').trim().toLowerCase();
+  const minA = Math.max(18, parseInt(ageMin, 10) || 18);
+  const maxA = Math.min(99, parseInt(ageMax, 10) || 99);
+
   filteredProfiles = allProfiles
     .filter(p => {
       // CRITICAL: never show the current user to themselves
       if (currentUser && isSameUser(currentUser, p)) return false;
 
+      // Age range
+      const age = Number(p.age);
+      if (!isNaN(age) && (age < minA || age > maxA)) return false;
+
+      // Distance / proximity
       let dist = null;
       let hasRealCoords = false;
       if (
@@ -362,18 +377,39 @@ function applyFilters() {
         );
         hasRealCoords = true;
       }
-
       if (hasRealCoords && dist != null && dist > maxDistance) return false;
 
-      if (currentFilter === 'all') return true;
-      if (currentFilter === 'marriage') return p.intent === 'marriage' || p.intent === 'long-term';
-      if (currentFilter === 'verified') return p.verified === true;
+      // Intent / verification filters
+      if (currentFilter === 'marriage') {
+        if (!(p.intent === 'marriage' || p.intent === 'long-term')) return false;
+      } else if (currentFilter === 'verified') {
+        if (p.verified !== true) return false;
+      }
+
+      // Free-text search across occupation, prompt tag/question/answer, name, city
+      if (q) {
+        const hay = [
+          p.occupation, p.promptTag, p.promptQuestion, p.promptAnswer,
+          p.name, p.city, p.locationDisplay, p.intent
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+
       return true;
     })
     .map(enrichProfileForDisplay)
     .sort((a, b) => {
+      // Prioritize: verified > recent registration > compatibility > proximity
+      const verDiff = (b.verified ? 1 : 0) - (a.verified ? 1 : 0);
+      if (verDiff !== 0) return verDiff;
+
+      const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (Math.abs(bTime - aTime) > 60000) return bTime - aTime; // newer first
+
       const scoreDiff = (b.matchScoreNum || 0) - (a.matchScoreNum || 0);
       if (Math.abs(scoreDiff) > 2) return scoreDiff;
+
       return (a.distanceNum || 99) - (b.distanceNum || 99);
     });
 
@@ -455,6 +491,7 @@ function initStatsCounter() {
 function initInteractiveSimulator() {
   const filters = document.querySelectorAll('.sim-filter');
   renderCurrentCard();
+  updateSimLocationLabel();
 
   filters.forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -466,6 +503,47 @@ function initInteractiveSimulator() {
       updateStatusText();
     });
   });
+
+  const searchInput = document.getElementById('simSearchInput');
+  if (searchInput) {
+    let debounce;
+    searchInput.addEventListener('input', () => {
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        searchQuery = searchInput.value || '';
+        applyFilters();
+        renderCurrentCard();
+        updateStatusText();
+      }, 220);
+    });
+  }
+
+  const ageMinEl = document.getElementById('simAgeMin');
+  const ageMaxEl = document.getElementById('simAgeMax');
+  const onAgeChange = () => {
+    ageMin = parseInt(ageMinEl?.value, 10) || 18;
+    ageMax = parseInt(ageMaxEl?.value, 10) || 99;
+    if (ageMin > ageMax) {
+      const t = ageMin;
+      ageMin = ageMax;
+      ageMax = t;
+    }
+    applyFilters();
+    renderCurrentCard();
+    updateStatusText();
+  };
+  if (ageMinEl) ageMinEl.addEventListener('change', onAgeChange);
+  if (ageMaxEl) ageMaxEl.addEventListener('change', onAgeChange);
+}
+
+function updateSimLocationLabel() {
+  const el = document.getElementById('simLocationLabel');
+  if (!el) return;
+  if (currentUser && currentUser.locationDisplay) {
+    el.textContent = currentUser.locationDisplay;
+  } else {
+    el.textContent = 'Your area';
+  }
 }
 
 function renderCurrentCard() {
@@ -536,6 +614,7 @@ function renderCurrentCard() {
 
       <div class="sim-actions">
         <button class="btn sim-btn-pass" onclick="handleSimAction('pass')">Pass</button>
+        <button class="btn sim-btn-comment" onclick="openCommentModal('${profile.id}')">💬 Comment</button>
         <button class="btn sim-btn-like" onclick="handleSimAction('like')">♥ Send Intentional Like</button>
       </div>
     </div>
@@ -604,18 +683,27 @@ function resetSim() {
 function resetSimFilters() {
   currentFilter = 'all';
   maxDistance = 25;
+  searchQuery = '';
+  ageMin = 18;
+  ageMax = 99;
   const slider = document.getElementById('proximitySlider');
   if (slider) {
     slider.value = 25;
     const valueLabel = document.getElementById('proximityValue');
     if (valueLabel) valueLabel.textContent = '25';
   }
+  const searchInput = document.getElementById('simSearchInput');
+  if (searchInput) searchInput.value = '';
+  const ageMinEl = document.getElementById('simAgeMin');
+  const ageMaxEl = document.getElementById('simAgeMax');
+  if (ageMinEl) ageMinEl.value = 18;
+  if (ageMaxEl) ageMaxEl.value = 99;
   document.querySelectorAll('.sim-filter').forEach(f => {
     f.classList.toggle('active', f.getAttribute('data-filter') === 'all');
   });
   applyFilters();
   renderCurrentCard();
-  showToast('Filters and distance reset');
+  showToast('Filters, search and distance reset');
 }
 
 function updateStatusText(custom) {
@@ -788,6 +876,7 @@ function initRegistration() {
     applyFilters();
     renderCurrentCard();
     updateUIForUser();
+    updateSimLocationLabel();
     close();
     showToast(`Welcome, ${profile.name}! Your profile is live and discoverable.`);
     if (submitBtn) {
@@ -968,6 +1057,7 @@ function initLogin() {
       applyFilters();
       renderCurrentCard();
       updateUIForUser();
+      updateSimLocationLabel();
       modal.classList.add('hidden');
       showToast(`Welcome back, ${user.name}!`);
     });
@@ -1257,12 +1347,16 @@ function renderLikesList() {
   const empty = document.getElementById('likesEmpty');
   const likes = loadFromStorage(STORAGE_LIKES, []);
 
-  let relevant = likes;
+  // "Who Liked You" — only likes received by the current user from others
+  let relevant = [];
   if (currentUser) {
     relevant = likes.filter(l =>
-      (l.targetUserId === currentUser.id || l.likedByUserId === currentUser.id) &&
-      l.likedByUserId !== l.targetUserId
+      l.targetUserId === currentUser.id &&
+      l.likedByUserId !== currentUser.id &&
+      l.likedByUserId !== 'guest'
     );
+  } else {
+    relevant = likes.filter(l => l.likedByUserId !== l.targetUserId).slice(0, 20);
   }
 
   if (!relevant.length) {
@@ -1271,15 +1365,84 @@ function renderLikesList() {
     return;
   }
   empty.classList.add('hidden');
-  list.innerHTML = relevant.map(l => `
-    <div class="like-item">
-      <img src="${l.targetAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80'}" alt="" />
-      <div class="like-item-info">
-        <h4>${escapeHtml(l.targetName || 'Someone')}</h4>
-        <p>${l.isPromptOnly ? 'Liked a prompt' : 'Sent intentional like'} · ${formatTime(l.timestamp)}</p>
+
+  // Resolve liker profile for avatar/name when possible
+  list.innerHTML = relevant.map(l => {
+    const liker = allProfiles.find(p => String(p.id) === String(l.likedByUserId));
+    const displayName = liker ? liker.name : (l.likedByName || 'Someone');
+    const displayAvatar = liker ? liker.avatar : (l.targetAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80');
+    const isMutual = currentUser ? hasMutualMatch(currentUser.id, l.likedByUserId) : false;
+    const actionLabel = isMutual ? 'Open chat' : 'Like back & message';
+    return `
+      <div class="like-item" role="button" tabindex="0" data-liker-id="${escapeHtml(String(l.likedByUserId))}" onclick="handleLikeItemClick('${escapeHtml(String(l.likedByUserId))}')">
+        <img src="${displayAvatar}" alt="" />
+        <div class="like-item-info">
+          <h4>${escapeHtml(displayName)}</h4>
+          <p>${l.isPromptOnly ? 'Liked your prompt' : 'Sent intentional like'} · ${formatTime(l.timestamp)}</p>
+          <span class="like-item-action">${actionLabel} →</span>
+        </div>
       </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
+}
+
+function hasMutualMatch(userIdA, userIdB) {
+  if (!userIdA || !userIdB || userIdA === userIdB) return false;
+  const matches = loadFromStorage(STORAGE_MATCHES, []);
+  return matches.some(m =>
+    (m.userA === userIdA && m.userB === userIdB) ||
+    (m.userB === userIdA && m.userA === userIdB)
+  );
+}
+
+/**
+ * From "Who Liked You": establish mutual match if needed, then open 1-on-1 chat.
+ */
+function handleLikeItemClick(likerId) {
+  if (!currentUser) {
+    showToast('Please log in to message people who liked you.');
+    document.getElementById('likesDrawer')?.classList.add('hidden');
+    document.getElementById('loginModal')?.classList.remove('hidden');
+    return;
+  }
+  if (String(likerId) === String(currentUser.id)) {
+    showToast('You cannot message yourself.');
+    return;
+  }
+
+  const likerProfile = allProfiles.find(p => String(p.id) === String(likerId));
+  if (!likerProfile) {
+    showToast('That profile is no longer available.');
+    return;
+  }
+
+  // Ensure mutual match exists (like-back if needed)
+  if (!hasMutualMatch(currentUser.id, likerId)) {
+    // Record reverse like from current user to establish mutual
+    recordLike(likerProfile, false);
+  }
+
+  // Find or create match id
+  let matches = loadFromStorage(STORAGE_MATCHES, []);
+  let match = matches.find(m =>
+    (m.userA === currentUser.id && m.userB === likerId) ||
+    (m.userB === currentUser.id && m.userA === likerId)
+  );
+  if (!match) {
+    createMatch(currentUser, likerProfile);
+    matches = loadFromStorage(STORAGE_MATCHES, []);
+    match = matches.find(m =>
+      (m.userA === currentUser.id && m.userB === likerId) ||
+      (m.userB === currentUser.id && m.userA === likerId)
+    );
+  }
+
+  document.getElementById('likesDrawer')?.classList.add('hidden');
+  if (match) {
+    openChatWithMatch(match.id);
+  } else {
+    showToast('Unable to open conversation. Please try again.');
+  }
 }
 
 function updateLikesBadge() {
@@ -1540,7 +1703,12 @@ function sendChatMessage() {
     timestamp: new Date().toISOString(),
     readAt: null
   });
-  saveToStorage(STORAGE_MESSAGES, messages);
+  try {
+    saveToStorage(STORAGE_MESSAGES, messages);
+  } catch (e) {
+    showToast('Message could not be saved — check storage or connection.');
+    return;
+  }
   input.value = '';
   broadcastTyping(false);
   renderChatThread(activeChatMatchId);
@@ -1842,6 +2010,7 @@ function initLocationFallback() {
       modal.classList.add('hidden');
       applyFilters();
       renderCurrentCard();
+      updateSimLocationLabel();
     } else {
       showToast('Still unable to access location. Please pick a city below.');
     }
@@ -1864,6 +2033,7 @@ function applyManualLocation(city) {
   showToast(`Location set to ${city.name}`);
   applyFilters();
   renderCurrentCard();
+  updateSimLocationLabel();
 }
 
 function persistCurrentUserLocation() {
@@ -1876,6 +2046,160 @@ function persistCurrentUserLocation() {
     saveToStorage(STORAGE_PROFILES, registered);
     allProfiles = registered.filter(p => !p.isMock);
   }
+}
+
+/* ==========================================================================
+   PROFILE COMMENT SYSTEM
+   ========================================================================== */
+function initComments() {
+  const modal = document.getElementById('commentModal');
+  const form = document.getElementById('commentForm');
+  const btnCancel = document.getElementById('btnCancelComment');
+
+  if (btnCancel) {
+    btnCancel.addEventListener('click', () => {
+      modal?.classList.add('hidden');
+      activeCommentProfileId = null;
+    });
+  }
+  modal?.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.classList.add('hidden');
+      activeCommentProfileId = null;
+    }
+  });
+
+  if (form) {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      postComment();
+    });
+  }
+
+  // Hero prototype comment button
+  document.querySelectorAll('.proto-btn.btn-comment').forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Demo: open comment on the hero Sophia-style card if no live profile
+      const first = filteredProfiles[0] || allProfiles[0];
+      if (first) openCommentModal(first.id);
+      else showToast('Register or discover a profile to leave a comment.');
+    });
+  });
+}
+
+function openCommentModal(profileId) {
+  if (!profileId) return;
+  const profile = allProfiles.find(p => String(p.id) === String(profileId)) ||
+    filteredProfiles.find(p => String(p.id) === String(profileId));
+  if (!profile) {
+    showToast('Profile not found.');
+    return;
+  }
+  if (currentUser && isSameUser(currentUser, profile)) {
+    showToast('You cannot comment on your own profile.');
+    return;
+  }
+
+  activeCommentProfileId = profile.id;
+  const modal = document.getElementById('commentModal');
+  const sub = document.getElementById('commentModalSub');
+  const targetInfo = document.getElementById('commentTargetInfo');
+  const existing = document.getElementById('existingComments');
+  const textArea = document.getElementById('commentText');
+  const err = document.getElementById('errComment');
+
+  if (sub) sub.textContent = `Leave an intentional note for ${profile.name}.`;
+  if (targetInfo) {
+    targetInfo.innerHTML = `
+      <img src="${profile.avatar}" alt="" />
+      <div>
+        <h4>${escapeHtml(profile.name)}, ${profile.age}</h4>
+        <p>${escapeHtml(profile.occupation)} · ${escapeHtml(profile.promptTag || 'Prompt')}</p>
+      </div>
+    `;
+  }
+  if (textArea) textArea.value = '';
+  if (err) err.textContent = '';
+
+  renderExistingComments(profile.id, existing);
+  modal?.classList.remove('hidden');
+}
+
+function renderExistingComments(profileId, container) {
+  if (!container) return;
+  const allComments = loadFromStorage(STORAGE_COMMENTS, {});
+  const list = allComments[profileId] || [];
+
+  if (!list.length) {
+    container.innerHTML = '<p class="comments-empty">No comments yet. Be the first to leave a thoughtful note.</p>';
+    return;
+  }
+
+  // Newest first
+  const sorted = [...list].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  container.innerHTML = sorted.map(c => `
+    <div class="comment-item">
+      <div class="comment-item-header">
+        <span class="comment-author">${escapeHtml(c.authorName || 'Member')}</span>
+        <span class="comment-time">${formatTime(c.timestamp)}</span>
+      </div>
+      <p class="comment-body">${escapeHtml(c.text)}</p>
+    </div>
+  `).join('');
+}
+
+function postComment() {
+  if (!activeCommentProfileId) return;
+  if (!currentUser) {
+    showToast('Please log in to post a comment.');
+    document.getElementById('commentModal')?.classList.add('hidden');
+    document.getElementById('loginModal')?.classList.remove('hidden');
+    return;
+  }
+
+  const profile = allProfiles.find(p => String(p.id) === String(activeCommentProfileId));
+  if (!profile || isSameUser(currentUser, profile)) {
+    showToast('You cannot comment on this profile.');
+    return;
+  }
+
+  const textArea = document.getElementById('commentText');
+  const err = document.getElementById('errComment');
+  const text = (textArea?.value || '').trim();
+  if (!text || text.length < 3) {
+    if (err) err.textContent = 'Please write a meaningful comment (3+ characters).';
+    return;
+  }
+  if (err) err.textContent = '';
+
+  const allComments = loadFromStorage(STORAGE_COMMENTS, {});
+  if (!allComments[activeCommentProfileId]) allComments[activeCommentProfileId] = [];
+
+  const entry = {
+    id: 'cmt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+    profileId: activeCommentProfileId,
+    authorId: currentUser.id,
+    authorName: currentUser.name,
+    text,
+    timestamp: new Date().toISOString()
+  };
+
+  // Optimistic update
+  allComments[activeCommentProfileId].unshift(entry);
+  if (allComments[activeCommentProfileId].length > 100) {
+    allComments[activeCommentProfileId].length = 100;
+  }
+  try {
+    saveToStorage(STORAGE_COMMENTS, allComments);
+  } catch (e) {
+    showToast('Unable to save comment — storage may be full or offline.');
+    return;
+  }
+
+  const existing = document.getElementById('existingComments');
+  renderExistingComments(activeCommentProfileId, existing);
+  if (textArea) textArea.value = '';
+  showToast(`Comment posted on ${profile.name}'s profile.`);
 }
 
 /* ==========================================================================
@@ -1896,3 +2220,5 @@ window.resetSim = resetSim;
 window.resetSimFilters = resetSimFilters;
 window.openChatWithMatch = openChatWithMatch;
 window.shareQuincyPlatform = shareQuincyPlatform;
+window.openCommentModal = openCommentModal;
+window.handleLikeItemClick = handleLikeItemClick;

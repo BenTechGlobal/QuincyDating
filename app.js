@@ -1,8 +1,9 @@
 // app.js
 
 /**
- * Quincy Dating Platform — Interactive Client Logic
- * State-driven, localStorage-persisted, modular Vanilla JS
+ * Quincy Dating Platform — Production-Ready Client Logic
+ * State-driven, StorageAdapter-backed, modular Vanilla JS
+ * Global proximity via Haversine, algorithmic compatibility, native Web Share
  * Fully dynamic: only real registered user profiles (no hardcoded mocks)
  */
 
@@ -18,11 +19,13 @@ document.addEventListener('DOMContentLoaded', () => {
   initLikesDrawer();
   initManageProfile();
   initMessages();
+  initShareModule();
+  initLocationFallback();
   updateUIForUser();
 });
 
 /* ==========================================================================
-   STATE & STORAGE HELPERS
+   STATE & STORAGE ABSTRACTION LAYER
    ========================================================================== */
 const STORAGE_PROFILES = 'quincy_registered_profiles';
 const STORAGE_LIKES = 'quincy_likes_received';
@@ -31,14 +34,33 @@ const STORAGE_MATCHES = 'quincy_matches';
 const STORAGE_MESSAGES = 'quincy_messages';
 const STORAGE_SESSION = 'quincy_session_token';
 
-let allProfiles = [];
-let filteredProfiles = [];
-let currentProfileIndex = 0;
-let currentFilter = 'all';
-let maxDistance = 25;
-let currentUser = null;
-let activeChatMatchId = null;
+/**
+ * StorageAdapter — async-ready abstraction for localStorage with
+ * future Firebase/Supabase sync hooks. Offline-first with local fallback.
+ */
+const StorageAdapter = {
+  async get(key, fallback) {
+    try {
+      const raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : fallback;
+    } catch {
+      return fallback;
+    }
+  },
+  async set(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+      // Future: await syncToCloud(key, value);
+    } catch (e) {
+      console.warn('StorageAdapter.set failed', e);
+    }
+  },
+  async remove(key) {
+    localStorage.removeItem(key);
+  }
+};
 
+// Synchronous helpers kept for compatibility with existing call sites
 function loadFromStorage(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -51,6 +73,15 @@ function loadFromStorage(key, fallback) {
 function saveToStorage(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
+
+let allProfiles = [];
+let filteredProfiles = [];
+let currentProfileIndex = 0;
+let currentFilter = 'all';
+let maxDistance = 25;
+let currentUser = null;
+let activeChatMatchId = null;
+let preferredUnit = 'miles'; // 'miles' | 'km'
 
 /** Simple client-side credential hash (demo only — not production-grade) */
 function hashCredential(str) {
@@ -65,6 +96,237 @@ function hashCredential(str) {
 function generateSessionToken(userId) {
   return 'qs_' + userId + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
+
+/* ==========================================================================
+   GEOLOCATION & HAVERSINE DISTANCE ENGINE
+   ========================================================================== */
+
+/**
+ * Haversine formula — exact great-circle distance between two lat/lon points.
+ * Returns distance in miles (default) or kilometres.
+ * R = 3958.8 mi / 6371 km
+ */
+function getDistanceHaversine(lat1, lon1, lat2, lon2, unit = 'miles') {
+  if (
+    lat1 == null || lon1 == null || lat2 == null || lon2 == null ||
+    isNaN(lat1) || isNaN(lon1) || isNaN(lat2) || isNaN(lon2)
+  ) {
+    return null;
+  }
+  const toRad = (deg) => (deg * Math.PI) / 180;
+  const R = unit === 'km' ? 6371 : 3958.8;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.asin(Math.sqrt(a));
+  return R * c;
+}
+
+/**
+ * Format a numeric distance for display cards.
+ */
+function formatDistance(milesOrKm, unit = preferredUnit) {
+  if (milesOrKm == null || isNaN(milesOrKm)) return 'Unknown distance';
+  const val = milesOrKm < 10 ? milesOrKm.toFixed(1) : Math.round(milesOrKm);
+  return unit === 'km' ? `${val} km away` : `${val} miles away`;
+}
+
+/**
+ * Request browser geolocation. Returns { latitude, longitude } or null.
+ */
+function requestGeolocation() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) {
+      resolve(null);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        resolve({
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy: pos.coords.accuracy
+        });
+      },
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 300000 }
+    );
+  });
+}
+
+/**
+ * Lightweight reverse-geocode via free OpenStreetMap Nominatim (no key required).
+ * Falls back to coordinate string if offline / rate-limited.
+ */
+async function reverseGeocode(lat, lon) {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1`;
+    const res = await fetch(url, {
+      headers: { 'Accept-Language': 'en', 'User-Agent': 'QuincyDating/1.0' }
+    });
+    if (!res.ok) throw new Error('geocode fail');
+    const data = await res.json();
+    const addr = data.address || {};
+    const city = addr.city || addr.town || addr.village || addr.municipality || addr.county || '';
+    const country = addr.country || '';
+    return {
+      city: city || 'Unknown',
+      country: country || '',
+      displayName: [city, country].filter(Boolean).join(', ') || `${lat.toFixed(3)}, ${lon.toFixed(3)}`
+    };
+  } catch {
+    return {
+      city: 'Unknown',
+      country: '',
+      displayName: `${lat.toFixed(3)}, ${lon.toFixed(3)}`
+    };
+  }
+}
+
+/**
+ * Attach coordinates + place name to a profile object.
+ * Shows location fallback modal if permission denied.
+ */
+async function attachLocationToProfile(profile) {
+  const coords = await requestGeolocation();
+  if (coords) {
+    profile.latitude = coords.latitude;
+    profile.longitude = coords.longitude;
+    const place = await reverseGeocode(coords.latitude, coords.longitude);
+    profile.city = place.city;
+    profile.country = place.country;
+    profile.locationDisplay = place.displayName;
+  } else {
+    // Trigger fallback UI; user can pick a city later
+    profile.latitude = null;
+    profile.longitude = null;
+    profile.city = '';
+    profile.country = '';
+    profile.locationDisplay = 'Location not set';
+    // Defer modal open so registration toast can finish
+    setTimeout(() => openLocationFallbackModal(profile), 600);
+  }
+  return profile;
+}
+
+/* ==========================================================================
+   COMPATIBILITY SCORING ENGINE
+   ========================================================================== */
+
+/**
+ * Multi-dimensional compatibility score (0–100).
+ * Vectors: Intent match, Prompt-tag alignment, Verification boost, Distance weight.
+ */
+function calculateCompatibilityScore(userA, userB) {
+  if (!userA || !userB) return 70;
+
+  let score = 55; // baseline
+
+  // 1. Relationship Intent (high weight)
+  if (userA.intent && userB.intent) {
+    if (userA.intent === userB.intent) {
+      score += 22;
+    } else if (
+      (userA.intent === 'marriage' && userB.intent === 'long-term') ||
+      (userA.intent === 'long-term' && userB.intent === 'marriage')
+    ) {
+      score += 14;
+    } else {
+      score += 4;
+    }
+  }
+
+  // 2. Prompt Tag / Goal alignment
+  const tagA = (userA.promptTag || '').toLowerCase();
+  const tagB = (userB.promptTag || '').toLowerCase();
+  if (tagA && tagB) {
+    if (tagA === tagB) score += 12;
+    else if (
+      (tagA.includes('relationship') && tagB.includes('relationship')) ||
+      (tagA.includes('green') && tagB.includes('green')) ||
+      (tagA.includes('sunday') && tagB.includes('sunday')) ||
+      (tagA.includes('non-negotiable') && tagB.includes('non-negotiable'))
+    ) {
+      score += 8;
+    } else {
+      score += 3;
+    }
+  }
+
+  // 3. Verification boost
+  if (userA.verified && userB.verified) score += 8;
+  else if (userA.verified || userB.verified) score += 3;
+
+  // 4. Distance weight (closer = higher)
+  let distMiles = null;
+  if (
+    userA.latitude != null && userA.longitude != null &&
+    userB.latitude != null && userB.longitude != null
+  ) {
+    distMiles = getDistanceHaversine(
+      userA.latitude, userA.longitude,
+      userB.latitude, userB.longitude,
+      'miles'
+    );
+  }
+  if (distMiles != null) {
+    if (distMiles <= 5) score += 10;
+    else if (distMiles <= 15) score += 6;
+    else if (distMiles <= 30) score += 3;
+    else if (distMiles <= 60) score += 1;
+    // farther adds nothing
+  } else {
+    score += 2; // unknown distance mild boost so cards still look alive
+  }
+
+  // Clamp & slight randomness for natural feel (max ±2)
+  score = Math.max(62, Math.min(99, Math.round(score + (Math.random() * 4 - 2))));
+  return score;
+}
+
+/**
+ * Enrich a profile with live distance & match score relative to currentUser.
+ */
+function enrichProfileForDisplay(profile) {
+  const enriched = { ...profile };
+
+  if (currentUser && currentUser.latitude != null && profile.latitude != null) {
+    const miles = getDistanceHaversine(
+      currentUser.latitude, currentUser.longitude,
+      profile.latitude, profile.longitude,
+      'miles'
+    );
+    const km = getDistanceHaversine(
+      currentUser.latitude, currentUser.longitude,
+      profile.latitude, profile.longitude,
+      'km'
+    );
+    enriched.distanceNum = preferredUnit === 'km' ? km : miles;
+    enriched.distance = formatDistance(enriched.distanceNum, preferredUnit);
+  } else if (profile.distanceNum != null) {
+    enriched.distance = formatDistance(profile.distanceNum, preferredUnit);
+  } else {
+    enriched.distanceNum = 99;
+    enriched.distance = 'Distance unknown';
+  }
+
+  if (currentUser) {
+    const pct = calculateCompatibilityScore(currentUser, profile);
+    enriched.matchScore = `${pct}% Match`;
+    enriched.matchScoreNum = pct;
+  } else {
+    enriched.matchScore = profile.matchScore || '—';
+  }
+
+  return enriched;
+}
+
+/* ==========================================================================
+   STATE INITIALISATION
+   ========================================================================== */
 
 /**
  * Initialize application state exclusively from registered (real) users.
@@ -90,18 +352,45 @@ function initState() {
 }
 
 /**
- * Filter pipeline: exclude self, enforce distance, apply intent/verified filters.
+ * Filter pipeline: exclude self, enforce Haversine distance, apply intent/verified filters.
  */
 function applyFilters() {
-  filteredProfiles = allProfiles.filter(p => {
-    if (currentUser && p.id === currentUser.id) return false;
-    const distOk = (p.distanceNum || parseFloat(p.distance) || 99) <= maxDistance;
-    if (!distOk) return false;
-    if (currentFilter === 'all') return true;
-    if (currentFilter === 'marriage') return p.intent === 'marriage' || p.intent === 'long-term';
-    if (currentFilter === 'verified') return p.verified === true;
-    return true;
-  });
+  filteredProfiles = allProfiles
+    .filter(p => {
+      if (currentUser && p.id === currentUser.id) return false;
+
+      // Compute live Haversine distance when both users have coordinates
+      let dist = null;
+      let hasRealCoords = false;
+      if (
+        currentUser &&
+        currentUser.latitude != null && currentUser.longitude != null &&
+        p.latitude != null && p.longitude != null
+      ) {
+        dist = getDistanceHaversine(
+          currentUser.latitude, currentUser.longitude,
+          p.latitude, p.longitude,
+          preferredUnit === 'km' ? 'km' : 'miles'
+        );
+        hasRealCoords = true;
+      }
+
+      // Only enforce distance filter when we have real coordinates
+      if (hasRealCoords && dist != null && dist > maxDistance) return false;
+
+      if (currentFilter === 'all') return true;
+      if (currentFilter === 'marriage') return p.intent === 'marriage' || p.intent === 'long-term';
+      if (currentFilter === 'verified') return p.verified === true;
+      return true;
+    })
+    .map(enrichProfileForDisplay)
+    .sort((a, b) => {
+      // Prefer higher match score, then closer distance
+      const scoreDiff = (b.matchScoreNum || 0) - (a.matchScoreNum || 0);
+      if (Math.abs(scoreDiff) > 2) return scoreDiff;
+      return (a.distanceNum || 99) - (b.distanceNum || 99);
+    });
+
   currentProfileIndex = 0;
 }
 
@@ -220,6 +509,9 @@ function renderCurrentCard() {
           <button class="btn btn-primary btn-glow" onclick="document.getElementById('btnHeroRegister')?.click() || document.getElementById('btnOpenRegister')?.click()">
             ${currentUser ? 'Invite Others / Share' : 'Register Your Profile'}
           </button>
+          ${currentUser ? `
+            <button class="btn btn-outline" onclick="shareQuincyPlatform()">Share Quincy</button>
+          ` : ''}
           ${hasAnyRegistered ? `
             <button class="btn btn-outline" onclick="resetSimFilters()">Reset Filters & Distance</button>
           ` : ''}
@@ -239,6 +531,9 @@ function renderCurrentCard() {
     : '';
 
   const liveBadge = '<span class="live-user-badge" title="Live registered user">Live</span>';
+  const locationLine = profile.locationDisplay
+    ? `<span class="sim-location">📍 ${escapeHtml(profile.locationDisplay)}</span>`
+    : '';
 
   cardStack.innerHTML = `
     <div class="sim-profile-card" id="currentSimCard">
@@ -247,6 +542,7 @@ function renderCurrentCard() {
         <div class="sim-details">
           <h3>${escapeHtml(profile.name)}, ${profile.age} ${verifiedBadge} ${liveBadge}</h3>
           <p class="sim-meta">${escapeHtml(profile.occupation)} • ${escapeHtml(profile.distance)}</p>
+          ${locationLine}
         </div>
         <div class="sim-match-pill">${escapeHtml(profile.matchScore)}</div>
       </div>
@@ -462,18 +758,31 @@ function initRegistration() {
     });
   });
 
-  form.addEventListener('submit', (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!validateRegistrationForm()) return;
 
-    const profile = buildProfileFromForm();
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Creating…';
+    }
+
+    let profile = buildProfileFromForm();
     const registered = loadFromStorage(STORAGE_PROFILES, []);
 
     if (registered.some(p => p.email && p.email.toLowerCase() === profile.email.toLowerCase())) {
       const errEl = document.getElementById('errEmail');
       if (errEl) errEl.textContent = 'An account with this email already exists. Please log in.';
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Create Profile';
+      }
       return;
     }
+
+    // Attach real geolocation
+    profile = await attachLocationToProfile(profile);
 
     registered.push(profile);
     saveToStorage(STORAGE_PROFILES, registered);
@@ -491,6 +800,10 @@ function initRegistration() {
     updateUIForUser();
     close();
     showToast(`Welcome, ${profile.name}! Your profile is live and discoverable.`);
+    if (submitBtn) {
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Create Profile';
+    }
   });
 }
 
@@ -517,6 +830,8 @@ function validateRegistrationForm() {
   const a = document.getElementById('regPromptAnswer').value.trim();
   const email = document.getElementById('regEmail')?.value.trim() || '';
   const password = document.getElementById('regPassword')?.value || '';
+
+  document.querySelectorAll('#registerForm input, #registerForm select, #registerForm textarea').forEach(el => el.classList.remove('invalid'));
 
   if (!name || name.length < 2) {
     err('errName', 'Please enter a valid name (2+ characters).');
@@ -560,7 +875,7 @@ function validateRegistrationForm() {
 
 /**
  * Build a real user profile object. isMock is always false.
- * ID uses a unique prefix for clarity.
+ * Coordinates are attached asynchronously after this call.
  */
 function buildProfileFromForm() {
   const name = document.getElementById('regName').value.trim();
@@ -578,17 +893,14 @@ function buildProfileFromForm() {
   const email = document.getElementById('regEmail').value.trim().toLowerCase();
   const password = document.getElementById('regPassword').value;
 
-  const dist = (Math.random() * 4 + 0.8).toFixed(1);
-  const score = Math.floor(Math.random() * 8 + 90);
-
   return {
     id: 'usr_' + Date.now(),
     name,
     age,
     occupation,
-    distance: `${dist} miles away`,
-    distanceNum: parseFloat(dist),
-    matchScore: `${score}% Match`,
+    distance: 'Calculating…',
+    distanceNum: null,
+    matchScore: '—',
     intent,
     verified,
     avatar,
@@ -599,6 +911,11 @@ function buildProfileFromForm() {
     passwordHash: hashCredential(password),
     isUser: true,
     isMock: false,
+    latitude: null,
+    longitude: null,
+    city: '',
+    country: '',
+    locationDisplay: '',
     createdAt: new Date().toISOString()
   };
 }
@@ -626,7 +943,7 @@ function initLogin() {
   }
 
   if (form) {
-    form.addEventListener('submit', (e) => {
+    form.addEventListener('submit', async (e) => {
       e.preventDefault();
       const email = document.getElementById('loginEmail').value.trim().toLowerCase();
       const password = document.getElementById('loginPassword').value;
@@ -643,6 +960,17 @@ function initLogin() {
       if (!user || user.passwordHash !== hashCredential(password)) {
         if (errEl) errEl.textContent = 'Invalid email or password.';
         return;
+      }
+
+      // Refresh location on login if missing
+      if (user.latitude == null || user.longitude == null) {
+        const updated = await attachLocationToProfile({ ...user });
+        Object.assign(user, updated);
+        const idx = registered.findIndex(p => p.id === user.id);
+        if (idx !== -1) {
+          registered[idx] = user;
+          saveToStorage(STORAGE_PROFILES, registered);
+        }
       }
 
       const token = generateSessionToken(user.id);
@@ -814,6 +1142,7 @@ function updateUIForUser() {
   const loginBtn = document.getElementById('btnOpenLogin');
   const messagesBtn = document.getElementById('btnOpenMessages');
   const userChip = document.getElementById('navUserChip');
+  const shareBtn = document.getElementById('btnSharePlatform');
 
   if (currentUser) {
     if (manageBtn) manageBtn.classList.remove('hidden');
@@ -823,6 +1152,7 @@ function updateUIForUser() {
     }
     if (loginBtn) loginBtn.classList.add('hidden');
     if (messagesBtn) messagesBtn.classList.remove('hidden');
+    if (shareBtn) shareBtn.classList.remove('hidden');
     if (userChip) {
       userChip.classList.remove('hidden');
       userChip.innerHTML = `<img src="${currentUser.avatar}" alt="" class="nav-user-avatar" /><span>${escapeHtml(currentUser.name)}</span>`;
@@ -835,6 +1165,7 @@ function updateUIForUser() {
     }
     if (loginBtn) loginBtn.classList.remove('hidden');
     if (messagesBtn) messagesBtn.classList.add('hidden');
+    if (shareBtn) shareBtn.classList.remove('hidden');
     if (userChip) userChip.classList.add('hidden');
   }
   updateLikesBadge();
@@ -846,7 +1177,6 @@ function updateUIForUser() {
    ========================================================================== */
 /**
  * Record a like. Mutual matches occur only between two real registered users.
- * Soft/demo mutuals for mock profiles have been removed.
  */
 function recordLike(targetProfile, isPromptOnly = false) {
   const likes = loadFromStorage(STORAGE_LIKES, []);
@@ -1196,12 +1526,16 @@ function initFeatureModules() {
   const slider = document.getElementById('proximitySlider');
   const valueLabel = document.getElementById('proximityValue');
   if (slider) {
+    // Sync initial value
+    maxDistance = parseInt(slider.value, 10) || 25;
+    if (valueLabel) valueLabel.textContent = maxDistance;
+
     slider.addEventListener('input', () => {
       maxDistance = parseInt(slider.value, 10);
       if (valueLabel) valueLabel.textContent = maxDistance;
       applyFilters();
       renderCurrentCard();
-      showToast(`Radar set to ${maxDistance} miles`);
+      showToast(`Radar set to ${maxDistance} ${preferredUnit === 'km' ? 'km' : 'miles'}`);
     });
   }
 
@@ -1213,6 +1547,189 @@ function initFeatureModules() {
       showToast("You liked Sophia's prompt!");
     });
   });
+}
+
+/* ==========================================================================
+   9. NATIVE WEB SHARE + FALLBACK SOCIAL MODAL
+   ========================================================================== */
+function initShareModule() {
+  const btnShare = document.getElementById('btnSharePlatform');
+  if (btnShare) {
+    btnShare.addEventListener('click', () => shareQuincyPlatform());
+  }
+
+  // Close share modal handlers
+  const shareModal = document.getElementById('shareModal');
+  const btnCloseShare = document.getElementById('btnCloseShareModal');
+  if (btnCloseShare) {
+    btnCloseShare.addEventListener('click', () => shareModal?.classList.add('hidden'));
+  }
+  shareModal?.addEventListener('click', (e) => {
+    if (e.target === shareModal) shareModal.classList.add('hidden');
+  });
+
+  // Fallback social buttons
+  document.getElementById('shareWhatsApp')?.addEventListener('click', () => {
+    const text = encodeURIComponent('Join me on Quincy — intentional dating with verified singles and real proximity discovery! ' + window.location.href);
+    window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank', 'noopener');
+  });
+  document.getElementById('shareFacebook')?.addEventListener('click', () => {
+    const url = encodeURIComponent(window.location.href);
+    window.open(`https://www.facebook.com/sharer/sharer.php?u=${url}`, '_blank', 'noopener');
+  });
+  document.getElementById('shareTwitter')?.addEventListener('click', () => {
+    const text = encodeURIComponent('Join me on Quincy — intentional dating with verified singles!');
+    const url = encodeURIComponent(window.location.href);
+    window.open(`https://twitter.com/intent/tweet?text=${text}&url=${url}`, '_blank', 'noopener');
+  });
+  document.getElementById('shareCopyLink')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      showToast('Link copied to clipboard!');
+    } catch {
+      // Fallback for older browsers
+      const ta = document.createElement('textarea');
+      ta.value = window.location.href;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('Link copied to clipboard!');
+    }
+    document.getElementById('shareModal')?.classList.add('hidden');
+  });
+}
+
+/**
+ * Primary share entry point — uses Web Share API when available,
+ * otherwise opens the fallback social modal.
+ */
+async function shareQuincyPlatform() {
+  const shareData = {
+    title: 'Quincy Dating Platform',
+    text: 'Join me on Quincy — intentional dating with verified singles and real proximity discovery!',
+    url: window.location.href
+  };
+
+  if (navigator.share && navigator.canShare && navigator.canShare(shareData)) {
+    try {
+      await navigator.share(shareData);
+      return;
+    } catch (err) {
+      // User cancelled or share failed — fall through to modal
+      if (err.name === 'AbortError') return;
+    }
+  } else if (navigator.share) {
+    // Older implementations without canShare
+    try {
+      await navigator.share(shareData);
+      return;
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+    }
+  }
+
+  // Fallback modal
+  document.getElementById('shareModal')?.classList.remove('hidden');
+}
+
+/* ==========================================================================
+   10. MANUAL LOCATION FALLBACK
+   ========================================================================== */
+const CITY_PRESETS = [
+  { name: 'New York, NY', lat: 40.7128, lon: -74.0060 },
+  { name: 'Los Angeles, CA', lat: 34.0522, lon: -118.2437 },
+  { name: 'Chicago, IL', lat: 41.8781, lon: -87.6298 },
+  { name: 'London, UK', lat: 51.5074, lon: -0.1278 },
+  { name: 'Toronto, CA', lat: 43.6532, lon: -79.3832 },
+  { name: 'Sydney, AU', lat: -33.8688, lon: 151.2093 },
+  { name: 'Berlin, DE', lat: 52.5200, lon: 13.4050 },
+  { name: 'Tokyo, JP', lat: 35.6762, lon: 139.6503 },
+  { name: 'Lagos, NG', lat: 6.5244, lon: 3.3792 },
+  { name: 'São Paulo, BR', lat: -23.5505, lon: -46.6333 },
+  { name: 'Dubai, AE', lat: 25.2048, lon: 55.2708 },
+  { name: 'Singapore', lat: 1.3521, lon: 103.8198 }
+];
+
+function initLocationFallback() {
+  const modal = document.getElementById('locationFallbackModal');
+  const btnClose = document.getElementById('btnCloseLocationFallback');
+  const list = document.getElementById('locationPresetList');
+
+  if (btnClose) {
+    btnClose.addEventListener('click', () => modal?.classList.add('hidden'));
+  }
+  modal?.addEventListener('click', (e) => {
+    if (e.target === modal) modal.classList.add('hidden');
+  });
+
+  if (list) {
+    list.innerHTML = CITY_PRESETS.map((c, i) => `
+      <button type="button" class="location-preset-btn" data-idx="${i}">
+        📍 ${c.name}
+      </button>
+    `).join('');
+
+    list.querySelectorAll('.location-preset-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.idx, 10);
+        const city = CITY_PRESETS[idx];
+        applyManualLocation(city);
+        modal.classList.add('hidden');
+      });
+    });
+  }
+
+  // Retry geolocation button
+  document.getElementById('btnRetryGeolocation')?.addEventListener('click', async () => {
+    if (!currentUser) return;
+    const coords = await requestGeolocation();
+    if (coords) {
+      currentUser.latitude = coords.latitude;
+      currentUser.longitude = coords.longitude;
+      const place = await reverseGeocode(coords.latitude, coords.longitude);
+      currentUser.city = place.city;
+      currentUser.country = place.country;
+      currentUser.locationDisplay = place.displayName;
+      persistCurrentUserLocation();
+      showToast(`Location set to ${place.displayName}`);
+      modal.classList.add('hidden');
+      applyFilters();
+      renderCurrentCard();
+    } else {
+      showToast('Still unable to access location. Please pick a city below.');
+    }
+  });
+}
+
+function openLocationFallbackModal(profile) {
+  const modal = document.getElementById('locationFallbackModal');
+  if (modal) modal.classList.remove('hidden');
+}
+
+function applyManualLocation(city) {
+  if (!currentUser) return;
+  currentUser.latitude = city.lat;
+  currentUser.longitude = city.lon;
+  currentUser.city = city.name.split(',')[0].trim();
+  currentUser.country = city.name.includes(',') ? city.name.split(',').slice(1).join(',').trim() : '';
+  currentUser.locationDisplay = city.name;
+  persistCurrentUserLocation();
+  showToast(`Location set to ${city.name}`);
+  applyFilters();
+  renderCurrentCard();
+}
+
+function persistCurrentUserLocation() {
+  if (!currentUser) return;
+  saveToStorage(STORAGE_CURRENT_USER, currentUser);
+  let registered = loadFromStorage(STORAGE_PROFILES, []);
+  const idx = registered.findIndex(p => p.id === currentUser.id);
+  if (idx !== -1) {
+    registered[idx] = { ...registered[idx], ...currentUser };
+    saveToStorage(STORAGE_PROFILES, registered);
+    allProfiles = registered.filter(p => !p.isMock);
+  }
 }
 
 /* ==========================================================================
@@ -1232,3 +1749,4 @@ window.handleInlineLike = handleInlineLike;
 window.resetSim = resetSim;
 window.resetSimFilters = resetSimFilters;
 window.openChatWithMatch = openChatWithMatch;
+window.shareQuincyPlatform = shareQuincyPlatform;

@@ -1865,3 +1865,29 @@ a {
     display: none;
   }
 }
+
+/* ==========================================================================
+   15. EMPTY STATE (REAL-USER PIPELINE)
+   ========================================================================== */
+.empty-state-card {
+  border: 1px dashed rgba(255, 75, 110, 0.35);
+  background: rgba(18, 14, 36, 0.6);
+}
+
+.empty-state-icon {
+  font-size: 2.5rem;
+  color: var(--primary);
+  margin-bottom: 12px;
+  opacity: 0.9;
+}
+
+.empty-state-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.empty-state-actions .btn {
+  min-width: 220px;
+}

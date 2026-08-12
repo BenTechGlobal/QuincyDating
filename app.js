@@ -1,10 +1,8 @@
-// app.js
-
 /**
- * Quincy Dating Platform — Production-Ready Client Logic
- * State-driven, StorageAdapter-backed, modular Vanilla JS
- * Global proximity via Haversine, algorithmic compatibility, native Web Share
- * Fully dynamic: only real registered user profiles (no hardcoded mocks)
+ * Quincy Dating Platform — Production Client Logic
+ * Preference-based matching • Strict self-match guards
+ * Intentional likes / prompt likes • Storage-event real-time messaging
+ * Typing indicators • Read receipts • Offline-first localStorage
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -21,11 +19,12 @@ document.addEventListener('DOMContentLoaded', () => {
   initMessages();
   initShareModule();
   initLocationFallback();
+  initRealtimeSync();
   updateUIForUser();
 });
 
 /* ==========================================================================
-   STATE & STORAGE ABSTRACTION LAYER
+   STATE & STORAGE
    ========================================================================== */
 const STORAGE_PROFILES = 'quincy_registered_profiles';
 const STORAGE_LIKES = 'quincy_likes_received';
@@ -33,11 +32,8 @@ const STORAGE_CURRENT_USER = 'quincy_current_user';
 const STORAGE_MATCHES = 'quincy_matches';
 const STORAGE_MESSAGES = 'quincy_messages';
 const STORAGE_SESSION = 'quincy_session_token';
+const STORAGE_TYPING = 'quincy_typing';
 
-/**
- * StorageAdapter — async-ready abstraction for localStorage with
- * future Firebase/Supabase sync hooks. Offline-first with local fallback.
- */
 const StorageAdapter = {
   async get(key, fallback) {
     try {
@@ -50,7 +46,6 @@ const StorageAdapter = {
   async set(key, value) {
     try {
       localStorage.setItem(key, JSON.stringify(value));
-      // Future: await syncToCloud(key, value);
     } catch (e) {
       console.warn('StorageAdapter.set failed', e);
     }
@@ -60,7 +55,6 @@ const StorageAdapter = {
   }
 };
 
-// Synchronous helpers kept for compatibility with existing call sites
 function loadFromStorage(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -81,9 +75,11 @@ let currentFilter = 'all';
 let maxDistance = 25;
 let currentUser = null;
 let activeChatMatchId = null;
-let preferredUnit = 'miles'; // 'miles' | 'km'
+let preferredUnit = 'miles';
+let chatPollTimer = null;
+let typingClearTimer = null;
 
-/** Simple client-side credential hash (demo only — not production-grade) */
+/** Demo-only credential hash — replace with proper server-side auth in production */
 function hashCredential(str) {
   let h = 0;
   for (let i = 0; i < str.length; i++) {
@@ -98,14 +94,41 @@ function generateSessionToken(userId) {
 }
 
 /* ==========================================================================
-   GEOLOCATION & HAVERSINE DISTANCE ENGINE
+   STRICT SELF-MATCH PREVENTION GUARD
    ========================================================================== */
-
 /**
- * Haversine formula — exact great-circle distance between two lat/lon points.
- * Returns distance in miles (default) or kilometres.
- * R = 3958.8 mi / 6371 km
+ * Returns true only when both profiles represent the exact same person.
+ * Guards against ID collision, duplicate email, or identical metadata loops.
  */
+function isSameUser(a, b) {
+  if (!a || !b) return false;
+  if (a.id && b.id && String(a.id) === String(b.id)) return true;
+  if (a.email && b.email && a.email.toLowerCase() === b.email.toLowerCase()) return true;
+  // Extra metadata guard for edge-case self-registration loops
+  if (
+    a.name && b.name && a.age && b.age &&
+    a.name.trim().toLowerCase() === b.name.trim().toLowerCase() &&
+    Number(a.age) === Number(b.age) &&
+    a.occupation && b.occupation &&
+    a.occupation.trim().toLowerCase() === b.occupation.trim().toLowerCase()
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function assertDistinctUsers(userA, userB, context = 'operation') {
+  if (isSameUser(userA, userB)) {
+    console.warn(`[Quincy Guard] Blocked self-${context}`);
+    showToast('You cannot interact with your own profile.');
+    return false;
+  }
+  return true;
+}
+
+/* ==========================================================================
+   GEOLOCATION & HAVERSINE
+   ========================================================================== */
 function getDistanceHaversine(lat1, lon1, lat2, lon2, unit = 'miles') {
   if (
     lat1 == null || lon1 == null || lat2 == null || lon2 == null ||
@@ -125,18 +148,12 @@ function getDistanceHaversine(lat1, lon1, lat2, lon2, unit = 'miles') {
   return R * c;
 }
 
-/**
- * Format a numeric distance for display cards.
- */
 function formatDistance(milesOrKm, unit = preferredUnit) {
   if (milesOrKm == null || isNaN(milesOrKm)) return 'Unknown distance';
   const val = milesOrKm < 10 ? milesOrKm.toFixed(1) : Math.round(milesOrKm);
   return unit === 'km' ? `${val} km away` : `${val} miles away`;
 }
 
-/**
- * Request browser geolocation. Returns { latitude, longitude } or null.
- */
 function requestGeolocation() {
   return new Promise((resolve) => {
     if (!navigator.geolocation) {
@@ -157,10 +174,6 @@ function requestGeolocation() {
   });
 }
 
-/**
- * Lightweight reverse-geocode via free OpenStreetMap Nominatim (no key required).
- * Falls back to coordinate string if offline / rate-limited.
- */
 async function reverseGeocode(lat, lon) {
   try {
     const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&addressdetails=1`;
@@ -186,10 +199,6 @@ async function reverseGeocode(lat, lon) {
   }
 }
 
-/**
- * Attach coordinates + place name to a profile object.
- * Shows location fallback modal if permission denied.
- */
 async function attachLocationToProfile(profile) {
   const coords = await requestGeolocation();
   if (coords) {
@@ -200,13 +209,11 @@ async function attachLocationToProfile(profile) {
     profile.country = place.country;
     profile.locationDisplay = place.displayName;
   } else {
-    // Trigger fallback UI; user can pick a city later
     profile.latitude = null;
     profile.longitude = null;
     profile.city = '';
     profile.country = '';
     profile.locationDisplay = 'Location not set';
-    // Defer modal open so registration toast can finish
     setTimeout(() => openLocationFallbackModal(profile), 600);
   }
   return profile;
@@ -215,17 +222,12 @@ async function attachLocationToProfile(profile) {
 /* ==========================================================================
    COMPATIBILITY SCORING ENGINE
    ========================================================================== */
-
-/**
- * Multi-dimensional compatibility score (0–100).
- * Vectors: Intent match, Prompt-tag alignment, Verification boost, Distance weight.
- */
 function calculateCompatibilityScore(userA, userB) {
-  if (!userA || !userB) return 70;
+  if (!userA || !userB || isSameUser(userA, userB)) return 0;
 
-  let score = 55; // baseline
+  let score = 55;
 
-  // 1. Relationship Intent (high weight)
+  // 1. Relationship Intent
   if (userA.intent && userB.intent) {
     if (userA.intent === userB.intent) {
       score += 22;
@@ -239,7 +241,7 @@ function calculateCompatibilityScore(userA, userB) {
     }
   }
 
-  // 2. Prompt Tag / Goal alignment
+  // 2. Prompt / value alignment
   const tagA = (userA.promptTag || '').toLowerCase();
   const tagB = (userB.promptTag || '').toLowerCase();
   if (tagA && tagB) {
@@ -256,11 +258,11 @@ function calculateCompatibilityScore(userA, userB) {
     }
   }
 
-  // 3. Verification boost
+  // 3. Verification
   if (userA.verified && userB.verified) score += 8;
   else if (userA.verified || userB.verified) score += 3;
 
-  // 4. Distance weight (closer = higher)
+  // 4. Distance weight
   let distMiles = null;
   if (
     userA.latitude != null && userA.longitude != null &&
@@ -277,19 +279,14 @@ function calculateCompatibilityScore(userA, userB) {
     else if (distMiles <= 15) score += 6;
     else if (distMiles <= 30) score += 3;
     else if (distMiles <= 60) score += 1;
-    // farther adds nothing
   } else {
-    score += 2; // unknown distance mild boost so cards still look alive
+    score += 2;
   }
 
-  // Clamp & slight randomness for natural feel (max ±2)
   score = Math.max(62, Math.min(99, Math.round(score + (Math.random() * 4 - 2))));
   return score;
 }
 
-/**
- * Enrich a profile with live distance & match score relative to currentUser.
- */
 function enrichProfileForDisplay(profile) {
   const enriched = { ...profile };
 
@@ -313,12 +310,13 @@ function enrichProfileForDisplay(profile) {
     enriched.distance = 'Distance unknown';
   }
 
-  if (currentUser) {
+  if (currentUser && !isSameUser(currentUser, profile)) {
     const pct = calculateCompatibilityScore(currentUser, profile);
     enriched.matchScore = `${pct}% Match`;
     enriched.matchScoreNum = pct;
   } else {
     enriched.matchScore = profile.matchScore || '—';
+    enriched.matchScoreNum = 0;
   }
 
   return enriched;
@@ -327,16 +325,10 @@ function enrichProfileForDisplay(profile) {
 /* ==========================================================================
    STATE INITIALISATION
    ========================================================================== */
-
-/**
- * Initialize application state exclusively from registered (real) users.
- * No hardcoded mock profiles are loaded into the discovery pool.
- */
 function initState() {
   const registered = loadFromStorage(STORAGE_PROFILES, []);
   currentUser = loadFromStorage(STORAGE_CURRENT_USER, null);
 
-  // Validate session token
   if (currentUser) {
     const session = loadFromStorage(STORAGE_SESSION, null);
     if (!session || session.userId !== currentUser.id || session.token !== currentUser.sessionToken) {
@@ -346,20 +338,16 @@ function initState() {
     }
   }
 
-  // Populate system strictly with live registered profiles
   allProfiles = registered.filter(p => !p.isMock);
   applyFilters();
 }
 
-/**
- * Filter pipeline: exclude self, enforce Haversine distance, apply intent/verified filters.
- */
 function applyFilters() {
   filteredProfiles = allProfiles
     .filter(p => {
-      if (currentUser && p.id === currentUser.id) return false;
+      // CRITICAL: never show the current user to themselves
+      if (currentUser && isSameUser(currentUser, p)) return false;
 
-      // Compute live Haversine distance when both users have coordinates
       let dist = null;
       let hasRealCoords = false;
       if (
@@ -375,7 +363,6 @@ function applyFilters() {
         hasRealCoords = true;
       }
 
-      // Only enforce distance filter when we have real coordinates
       if (hasRealCoords && dist != null && dist > maxDistance) return false;
 
       if (currentFilter === 'all') return true;
@@ -385,7 +372,6 @@ function applyFilters() {
     })
     .map(enrichProfileForDisplay)
     .sort((a, b) => {
-      // Prefer higher match score, then closer distance
       const scoreDiff = (b.matchScoreNum || 0) - (a.matchScoreNum || 0);
       if (Math.abs(scoreDiff) > 2) return scoreDiff;
       return (a.distanceNum || 99) - (b.distanceNum || 99);
@@ -395,7 +381,7 @@ function applyFilters() {
 }
 
 /* ==========================================================================
-   1. AGE VERIFICATION GATE
+   AGE GATE
    ========================================================================== */
 function initAgeGate() {
   const ageGateModal = document.getElementById('ageGateModal');
@@ -428,7 +414,7 @@ function initAgeGate() {
 }
 
 /* ==========================================================================
-   2. HERO STATS ANIMATED COUNTER
+   HERO STATS
    ========================================================================== */
 function initStatsCounter() {
   const statElements = document.querySelectorAll('.stat-value');
@@ -452,26 +438,22 @@ function initStatsCounter() {
   function animateValue(obj, start, end, duration) {
     let startTimestamp = null;
     const isFloat = end % 1 !== 0;
-
     const step = (timestamp) => {
       if (!startTimestamp) startTimestamp = timestamp;
       const progress = Math.min((timestamp - startTimestamp) / duration, 1);
       const current = start + progress * (end - start);
       obj.innerHTML = isFloat ? current.toFixed(1) : Math.floor(current);
-      if (progress < 1) {
-        window.requestAnimationFrame(step);
-      }
+      if (progress < 1) window.requestAnimationFrame(step);
     };
     window.requestAnimationFrame(step);
   }
 }
 
 /* ==========================================================================
-   3. INTERACTIVE MATCHING PREVIEW SIMULATOR
+   INTERACTIVE MATCHING PREVIEW
    ========================================================================== */
 function initInteractiveSimulator() {
   const filters = document.querySelectorAll('.sim-filter');
-
   renderCurrentCard();
 
   filters.forEach(btn => {
@@ -486,10 +468,6 @@ function initInteractiveSimulator() {
   });
 }
 
-/**
- * Render the current discovery card.
- * When no real registered profiles match filters, show a high-conversion empty state.
- */
 function renderCurrentCard() {
   const cardStack = document.getElementById('simCardStack');
   const profile = filteredProfiles[currentProfileIndex];
@@ -509,12 +487,8 @@ function renderCurrentCard() {
           <button class="btn btn-primary btn-glow" onclick="document.getElementById('btnHeroRegister')?.click() || document.getElementById('btnOpenRegister')?.click()">
             ${currentUser ? 'Invite Others / Share' : 'Register Your Profile'}
           </button>
-          ${currentUser ? `
-            <button class="btn btn-outline" onclick="shareQuincyPlatform()">Share Quincy</button>
-          ` : ''}
-          ${hasAnyRegistered ? `
-            <button class="btn btn-outline" onclick="resetSimFilters()">Reset Filters & Distance</button>
-          ` : ''}
+          ${currentUser ? `<button class="btn btn-outline" onclick="shareQuincyPlatform()">Share Quincy</button>` : ''}
+          ${hasAnyRegistered ? `<button class="btn btn-outline" onclick="resetSimFilters()">Reset Filters & Distance</button>` : ''}
         </div>
       </div>
     `;
@@ -523,6 +497,12 @@ function renderCurrentCard() {
         ? 'No profiles match your current filters or distance. Adjust and try again.'
         : 'Be the first to register — your profile will appear here for others to discover.'
     );
+    return;
+  }
+
+  // Final self-guard before render
+  if (currentUser && isSameUser(currentUser, profile)) {
+    advanceProfile();
     return;
   }
 
@@ -568,12 +548,18 @@ function handleSimAction(action) {
   const currentProfile = filteredProfiles[currentProfileIndex];
   if (!currentProfile) return;
 
+  if (currentUser && isSameUser(currentUser, currentProfile)) {
+    showToast('You cannot interact with your own profile.');
+    advanceProfile();
+    return;
+  }
+
   if (action === 'like') {
     if (card) {
       card.classList.add('swipe-right');
       spawnHeartBurst(card);
     }
-    const isMutual = recordLike(currentProfile);
+    const isMutual = recordLike(currentProfile, false);
     setTimeout(() => {
       triggerMatchCelebration(currentProfile, isMutual);
     }, 280);
@@ -586,13 +572,22 @@ function handleSimAction(action) {
 function handleInlineLike(profileId) {
   const profile = allProfiles.find(p => String(p.id) === String(profileId));
   if (!profile) return;
+  if (currentUser && isSameUser(currentUser, profile)) {
+    showToast('You cannot like your own prompt.');
+    return;
+  }
   const btn = document.querySelector('.inline-like-btn');
   if (btn) {
     btn.classList.add('liked');
     btn.textContent = '♥ Liked';
   }
-  recordLike(profile, true);
-  showToast(`You liked ${profile.name}'s prompt!`);
+  const isMutual = recordLike(profile, true);
+  if (isMutual) {
+    showToast(`Mutual prompt connection with ${profile.name}! Messaging unlocked.`);
+    triggerMatchCelebration(profile, true);
+  } else {
+    showToast(`You liked ${profile.name}'s prompt!`);
+  }
 }
 
 function advanceProfile() {
@@ -637,7 +632,7 @@ function updateStatusText(custom) {
 }
 
 /* ==========================================================================
-   4. MATCH CELEBRATION MODAL
+   MATCH CELEBRATION
    ========================================================================== */
 function initMatchModal() {
   const btnClose = document.getElementById('btnCloseMatchModal');
@@ -656,14 +651,14 @@ function initMatchModal() {
     btnStartChat.addEventListener('click', () => {
       matchModal.classList.add('hidden');
       const matchId = btnStartChat.dataset.matchId;
-      if (matchId) {
-        openChatWithMatch(matchId);
-      }
+      if (matchId) openChatWithMatch(matchId);
     });
   }
 }
 
 function triggerMatchCelebration(profile, isMutual = false) {
+  if (currentUser && isSameUser(currentUser, profile)) return;
+
   const matchModal = document.getElementById('matchModal');
   const matchNameHeading = document.getElementById('matchNameHeading');
   const matchTargetAvatar = document.getElementById('matchTargetAvatar');
@@ -716,7 +711,7 @@ function spawnHeartBurst(container) {
 }
 
 /* ==========================================================================
-   5. REGISTRATION, LOGIN & PROFILE MANAGEMENT
+   REGISTRATION, LOGIN & PROFILE MANAGEMENT
    ========================================================================== */
 function initRegistration() {
   const modal = document.getElementById('registerModal');
@@ -733,11 +728,8 @@ function initRegistration() {
   const close = () => modal.classList.add('hidden');
 
   if (btnOpen) btnOpen.addEventListener('click', () => {
-    if (currentUser) {
-      openEditProfile();
-    } else {
-      open();
-    }
+    if (currentUser) openEditProfile();
+    else open();
   });
   if (btnHero) btnHero.addEventListener('click', open);
   if (btnCancel) btnCancel.addEventListener('click', close);
@@ -781,7 +773,6 @@ function initRegistration() {
       return;
     }
 
-    // Attach real geolocation
     profile = await attachLocationToProfile(profile);
 
     registered.push(profile);
@@ -793,7 +784,6 @@ function initRegistration() {
     saveToStorage(STORAGE_SESSION, { userId: profile.id, token });
     currentUser = profile;
 
-    // Sync into live pool immediately
     allProfiles = registered.filter(p => !p.isMock);
     applyFilters();
     renderCurrentCard();
@@ -811,7 +801,7 @@ function validateRegistrationForm() {
   let valid = true;
   const clear = (id) => {
     const el = document.getElementById(id);
-    if (el) { el.textContent = ''; }
+    if (el) el.textContent = '';
   };
   const err = (id, msg) => {
     const el = document.getElementById(id);
@@ -873,10 +863,6 @@ function validateRegistrationForm() {
   return valid;
 }
 
-/**
- * Build a real user profile object. isMock is always false.
- * Coordinates are attached asynchronously after this call.
- */
 function buildProfileFromForm() {
   const name = document.getElementById('regName').value.trim();
   const age = parseInt(document.getElementById('regAge').value, 10);
@@ -894,7 +880,7 @@ function buildProfileFromForm() {
   const password = document.getElementById('regPassword').value;
 
   return {
-    id: 'usr_' + Date.now(),
+    id: 'usr_' + Date.now() + '_' + Math.random().toString(36).slice(2, 7),
     name,
     age,
     occupation,
@@ -920,7 +906,6 @@ function buildProfileFromForm() {
   };
 }
 
-/* ---------- Login ---------- */
 function initLogin() {
   const modal = document.getElementById('loginModal');
   const form = document.getElementById('loginForm');
@@ -928,12 +913,8 @@ function initLogin() {
   const btnCancel = document.getElementById('btnCancelLogin');
   const switchToRegister = document.getElementById('switchToRegister');
 
-  if (btnOpen) {
-    btnOpen.addEventListener('click', () => modal?.classList.remove('hidden'));
-  }
-  if (btnCancel) {
-    btnCancel.addEventListener('click', () => modal?.classList.add('hidden'));
-  }
+  if (btnOpen) btnOpen.addEventListener('click', () => modal?.classList.remove('hidden'));
+  if (btnCancel) btnCancel.addEventListener('click', () => modal?.classList.add('hidden'));
   if (switchToRegister) {
     switchToRegister.addEventListener('click', (e) => {
       e.preventDefault();
@@ -962,7 +943,6 @@ function initLogin() {
         return;
       }
 
-      // Refresh location on login if missing
       if (user.latitude == null || user.longitude == null) {
         const updated = await attachLocationToProfile({ ...user });
         Object.assign(user, updated);
@@ -994,7 +974,6 @@ function initLogin() {
   }
 }
 
-/* ---------- Profile Edit / Erase ---------- */
 function initManageProfile() {
   const eraseModal = document.getElementById('eraseConfirmModal');
   const btnConfirm = document.getElementById('btnConfirmErase');
@@ -1032,9 +1011,7 @@ function initManageProfile() {
     });
   }
 
-  if (btnCancel) {
-    btnCancel.addEventListener('click', () => eraseModal.classList.add('hidden'));
-  }
+  if (btnCancel) btnCancel.addEventListener('click', () => eraseModal.classList.add('hidden'));
   if (btnConfirm) {
     btnConfirm.addEventListener('click', () => {
       if (!currentUser) return;
@@ -1127,9 +1104,11 @@ function saveEditedProfile() {
 }
 
 function logoutUser() {
+  stopChatPolling();
   localStorage.removeItem(STORAGE_CURRENT_USER);
   localStorage.removeItem(STORAGE_SESSION);
   currentUser = null;
+  activeChatMatchId = null;
   applyFilters();
   renderCurrentCard();
   updateUIForUser();
@@ -1173,12 +1152,19 @@ function updateUIForUser() {
 }
 
 /* ==========================================================================
-   6. LIKES TRACKING, MUTUAL MATCHES & DRAWER
+   LIKES, MUTUAL MATCHES
    ========================================================================== */
 /**
- * Record a like. Mutual matches occur only between two real registered users.
+ * Record an intentional like or prompt like.
+ * Mutual match is created ONLY when a distinct reverse like already exists.
  */
 function recordLike(targetProfile, isPromptOnly = false) {
+  if (!targetProfile) return false;
+  if (currentUser && isSameUser(currentUser, targetProfile)) {
+    showToast('You cannot like your own profile.');
+    return false;
+  }
+
   const likes = loadFromStorage(STORAGE_LIKES, []);
   const entry = {
     likedByUserId: currentUser ? currentUser.id : 'guest',
@@ -1191,18 +1177,29 @@ function recordLike(targetProfile, isPromptOnly = false) {
     isPromptOnly
   };
   likes.unshift(entry);
-  if (likes.length > 100) likes.length = 100;
+  if (likes.length > 200) likes.length = 200;
   saveToStorage(STORAGE_LIKES, likes);
   updateLikesBadge();
 
   let isMutual = false;
   if (currentUser && !targetProfile.isMock) {
+    // Look for a reverse intentional like from the target to current user
     const reverseLike = likes.find(l =>
       l.likedByUserId === targetProfile.id &&
       l.targetUserId === currentUser.id &&
-      !l.isPromptOnly
+      !l.isPromptOnly &&
+      l.likedByUserId !== l.targetUserId
     );
-    if (reverseLike) {
+    // Also accept a prompt-only reverse as soft mutual for prompt likes
+    const reversePrompt = isPromptOnly
+      ? likes.find(l =>
+          l.likedByUserId === targetProfile.id &&
+          l.targetUserId === currentUser.id &&
+          l.likedByUserId !== l.targetUserId
+        )
+      : null;
+
+    if (reverseLike || reversePrompt) {
       isMutual = true;
       createMatch(currentUser, targetProfile);
     }
@@ -1211,7 +1208,9 @@ function recordLike(targetProfile, isPromptOnly = false) {
   return isMutual;
 }
 
-function createMatch(userA, userB, isSoft = false) {
+function createMatch(userA, userB) {
+  if (!assertDistinctUsers(userA, userB, 'match')) return;
+
   const matches = loadFromStorage(STORAGE_MATCHES, []);
   const exists = matches.some(m =>
     (m.userA === userA.id && m.userB === userB.id) ||
@@ -1220,7 +1219,7 @@ function createMatch(userA, userB, isSoft = false) {
   if (exists) return;
 
   const match = {
-    id: 'match_' + Date.now(),
+    id: 'match_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
     userA: userA.id,
     userB: userB.id,
     userAName: userA.name,
@@ -1233,6 +1232,7 @@ function createMatch(userA, userB, isSoft = false) {
   matches.unshift(match);
   saveToStorage(STORAGE_MATCHES, matches);
   updateMessagesBadge();
+  showToast(`New match with ${userB.name}! Messaging is now open.`);
 }
 
 function initLikesDrawer() {
@@ -1246,9 +1246,7 @@ function initLikesDrawer() {
       drawer.classList.remove('hidden');
     });
   }
-  if (btnClose) {
-    btnClose.addEventListener('click', () => drawer.classList.add('hidden'));
-  }
+  if (btnClose) btnClose.addEventListener('click', () => drawer.classList.add('hidden'));
   drawer?.addEventListener('click', (e) => {
     if (e.target === drawer) drawer.classList.add('hidden');
   });
@@ -1261,7 +1259,10 @@ function renderLikesList() {
 
   let relevant = likes;
   if (currentUser) {
-    relevant = likes.filter(l => l.targetUserId === currentUser.id || l.likedByUserId === currentUser.id);
+    relevant = likes.filter(l =>
+      (l.targetUserId === currentUser.id || l.likedByUserId === currentUser.id) &&
+      l.likedByUserId !== l.targetUserId
+    );
   }
 
   if (!relevant.length) {
@@ -1286,7 +1287,7 @@ function updateLikesBadge() {
   if (!badge) return;
   const likes = loadFromStorage(STORAGE_LIKES, []);
   const count = currentUser
-    ? likes.filter(l => l.targetUserId === currentUser.id).length
+    ? likes.filter(l => l.targetUserId === currentUser.id && l.likedByUserId !== currentUser.id).length
     : likes.length;
   if (count > 0) {
     badge.textContent = count > 9 ? '9+' : count;
@@ -1311,7 +1312,7 @@ function formatTime(iso) {
 }
 
 /* ==========================================================================
-   7. MESSAGING SYSTEM
+   MESSAGING SYSTEM + REAL-TIME SYNC
    ========================================================================== */
 function initMessages() {
   const drawer = document.getElementById('messagesDrawer');
@@ -1319,6 +1320,7 @@ function initMessages() {
   const btnClose = document.getElementById('btnCloseMessages');
   const chatForm = document.getElementById('chatForm');
   const btnBackToMatches = document.getElementById('btnBackToMatches');
+  const chatInput = document.getElementById('chatInput');
 
   if (btnOpen) {
     btnOpen.addEventListener('click', () => {
@@ -1329,17 +1331,25 @@ function initMessages() {
     });
   }
   if (btnClose) {
-    btnClose.addEventListener('click', () => drawer?.classList.add('hidden'));
+    btnClose.addEventListener('click', () => {
+      stopChatPolling();
+      drawer?.classList.add('hidden');
+    });
   }
   drawer?.addEventListener('click', (e) => {
-    if (e.target === drawer) drawer.classList.add('hidden');
+    if (e.target === drawer) {
+      stopChatPolling();
+      drawer.classList.add('hidden');
+    }
   });
 
   if (btnBackToMatches) {
     btnBackToMatches.addEventListener('click', () => {
+      stopChatPolling();
       document.getElementById('matchesListView')?.classList.remove('hidden');
       document.getElementById('chatView')?.classList.add('hidden');
       activeChatMatchId = null;
+      clearTypingIndicator();
     });
   }
 
@@ -1350,10 +1360,18 @@ function initMessages() {
     });
   }
 
-  const btnSaveEdit = document.getElementById('btnSaveEditProfile');
-  if (btnSaveEdit) {
-    btnSaveEdit.addEventListener('click', saveEditedProfile);
+  // Typing indicator: broadcast while user types
+  if (chatInput) {
+    chatInput.addEventListener('input', () => {
+      if (!activeChatMatchId || !currentUser) return;
+      broadcastTyping(true);
+      clearTimeout(typingClearTimer);
+      typingClearTimer = setTimeout(() => broadcastTyping(false), 1800);
+    });
   }
+
+  const btnSaveEdit = document.getElementById('btnSaveEditProfile');
+  if (btnSaveEdit) btnSaveEdit.addEventListener('click', saveEditedProfile);
   const btnCancelEdit = document.getElementById('btnCancelEditProfile');
   if (btnCancelEdit) {
     btnCancelEdit.addEventListener('click', () => {
@@ -1365,7 +1383,10 @@ function initMessages() {
 function getMatchesForCurrentUser() {
   if (!currentUser) return [];
   const matches = loadFromStorage(STORAGE_MATCHES, []);
-  return matches.filter(m => m.userA === currentUser.id || m.userB === currentUser.id);
+  return matches.filter(m =>
+    (m.userA === currentUser.id || m.userB === currentUser.id) &&
+    m.userA !== m.userB
+  );
 }
 
 function renderMatchesList() {
@@ -1409,11 +1430,22 @@ function openChatWithMatch(matchId) {
     showToast('Please log in to message matches.');
     return;
   }
-  activeChatMatchId = matchId;
+
   const matches = loadFromStorage(STORAGE_MATCHES, []);
   const match = matches.find(m => m.id === matchId);
   if (!match) return;
 
+  // Self-chat guard
+  if (match.userA === match.userB) {
+    showToast('Invalid match — cannot open chat with yourself.');
+    return;
+  }
+  if (match.userA !== currentUser.id && match.userB !== currentUser.id) {
+    showToast('You are not part of this match.');
+    return;
+  }
+
+  activeChatMatchId = matchId;
   const isA = match.userA === currentUser.id;
   const otherName = isA ? match.userBName : match.userAName;
   const otherAvatar = isA ? match.userBAvatar : match.userAAvatar;
@@ -1421,11 +1453,33 @@ function openChatWithMatch(matchId) {
   document.getElementById('chatPartnerName').textContent = otherName;
   document.getElementById('chatPartnerAvatar').src = otherAvatar;
 
+  // Mark incoming messages as read
+  markMessagesRead(matchId);
+
   renderChatThread(matchId);
 
   document.getElementById('matchesListView')?.classList.add('hidden');
   document.getElementById('chatView')?.classList.remove('hidden');
   document.getElementById('messagesDrawer')?.classList.remove('hidden');
+
+  startChatPolling();
+}
+
+function markMessagesRead(matchId) {
+  if (!currentUser) return;
+  const messages = loadFromStorage(STORAGE_MESSAGES, {});
+  const thread = messages[matchId] || [];
+  let changed = false;
+  thread.forEach(msg => {
+    if (msg.senderId !== currentUser.id && !msg.readAt) {
+      msg.readAt = new Date().toISOString();
+      changed = true;
+    }
+  });
+  if (changed) {
+    messages[matchId] = thread;
+    saveToStorage(STORAGE_MESSAGES, messages);
+  }
 }
 
 function renderChatThread(matchId) {
@@ -1441,10 +1495,15 @@ function renderChatThread(matchId) {
 
   container.innerHTML = thread.map(msg => {
     const isMine = msg.senderId === currentUser.id;
+    const receipt = isMine
+      ? (msg.readAt
+          ? '<span class="read-receipt read" title="Read">✓✓</span>'
+          : '<span class="read-receipt" title="Sent">✓</span>')
+      : '';
     return `
       <div class="chat-bubble ${isMine ? 'mine' : 'theirs'}">
         <p>${escapeHtml(msg.text)}</p>
-        <span class="chat-time">${formatTime(msg.timestamp)}</span>
+        <span class="chat-time">${formatTime(msg.timestamp)} ${receipt}</span>
       </div>
     `;
   }).join('');
@@ -1453,6 +1512,19 @@ function renderChatThread(matchId) {
 
 function sendChatMessage() {
   if (!activeChatMatchId || !currentUser) return;
+
+  // Final guard: verify the match is between two distinct users and includes me
+  const matches = loadFromStorage(STORAGE_MATCHES, []);
+  const match = matches.find(m => m.id === activeChatMatchId);
+  if (!match || match.userA === match.userB) {
+    showToast('Cannot send message — invalid match.');
+    return;
+  }
+  if (match.userA !== currentUser.id && match.userB !== currentUser.id) {
+    showToast('You are not part of this conversation.');
+    return;
+  }
+
   const input = document.getElementById('chatInput');
   const text = input?.value.trim();
   if (!text) return;
@@ -1461,14 +1533,16 @@ function sendChatMessage() {
   if (!messages[activeChatMatchId]) messages[activeChatMatchId] = [];
 
   messages[activeChatMatchId].push({
-    id: 'msg_' + Date.now(),
+    id: 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
     senderId: currentUser.id,
     senderName: currentUser.name,
     text,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    readAt: null
   });
   saveToStorage(STORAGE_MESSAGES, messages);
   input.value = '';
+  broadcastTyping(false);
   renderChatThread(activeChatMatchId);
   updateMessagesBadge();
 }
@@ -1485,6 +1559,96 @@ function updateMessagesBadge() {
   }
 }
 
+/* ---------- Typing indicator & real-time sync ---------- */
+function broadcastTyping(isTyping) {
+  if (!activeChatMatchId || !currentUser) return;
+  const typing = loadFromStorage(STORAGE_TYPING, {});
+  typing[activeChatMatchId] = {
+    userId: currentUser.id,
+    isTyping: !!isTyping,
+    ts: Date.now()
+  };
+  saveToStorage(STORAGE_TYPING, typing);
+}
+
+function clearTypingIndicator() {
+  const el = document.getElementById('typingIndicator');
+  if (el) el.classList.add('hidden');
+}
+
+function refreshTypingIndicator() {
+  if (!activeChatMatchId || !currentUser) {
+    clearTypingIndicator();
+    return;
+  }
+  const typing = loadFromStorage(STORAGE_TYPING, {});
+  const state = typing[activeChatMatchId];
+  const el = document.getElementById('typingIndicator');
+  if (!el) return;
+
+  if (
+    state &&
+    state.isTyping &&
+    state.userId !== currentUser.id &&
+    Date.now() - state.ts < 2500
+  ) {
+    el.classList.remove('hidden');
+  } else {
+    el.classList.add('hidden');
+  }
+}
+
+function startChatPolling() {
+  stopChatPolling();
+  chatPollTimer = setInterval(() => {
+    if (!activeChatMatchId) return;
+    markMessagesRead(activeChatMatchId);
+    renderChatThread(activeChatMatchId);
+    refreshTypingIndicator();
+  }, 1200);
+}
+
+function stopChatPolling() {
+  if (chatPollTimer) {
+    clearInterval(chatPollTimer);
+    chatPollTimer = null;
+  }
+}
+
+/**
+ * Cross-tab real-time sync via storage events.
+ * When another tab writes messages / matches / likes, this tab reacts.
+ */
+function initRealtimeSync() {
+  window.addEventListener('storage', (e) => {
+    if (!e.key) return;
+
+    if (e.key === STORAGE_MESSAGES && activeChatMatchId) {
+      markMessagesRead(activeChatMatchId);
+      renderChatThread(activeChatMatchId);
+      refreshTypingIndicator();
+    }
+    if (e.key === STORAGE_MATCHES) {
+      updateMessagesBadge();
+      if (document.getElementById('matchesListView') &&
+          !document.getElementById('matchesListView').classList.contains('hidden')) {
+        renderMatchesList();
+      }
+    }
+    if (e.key === STORAGE_LIKES) {
+      updateLikesBadge();
+    }
+    if (e.key === STORAGE_TYPING) {
+      refreshTypingIndicator();
+    }
+    if (e.key === STORAGE_PROFILES) {
+      allProfiles = loadFromStorage(STORAGE_PROFILES, []).filter(p => !p.isMock);
+      applyFilters();
+      renderCurrentCard();
+    }
+  });
+}
+
 function escapeHtml(str) {
   if (str == null) return '';
   const div = document.createElement('div');
@@ -1493,7 +1657,7 @@ function escapeHtml(str) {
 }
 
 /* ==========================================================================
-   8. FEATURE MODULES (Audio, Proximity Slider, Inline Likes)
+   FEATURE MODULES
    ========================================================================== */
 function initFeatureModules() {
   const playBtn = document.getElementById('audioPlayBtn');
@@ -1526,7 +1690,6 @@ function initFeatureModules() {
   const slider = document.getElementById('proximitySlider');
   const valueLabel = document.getElementById('proximityValue');
   if (slider) {
-    // Sync initial value
     maxDistance = parseInt(slider.value, 10) || 25;
     if (valueLabel) valueLabel.textContent = maxDistance;
 
@@ -1550,25 +1713,19 @@ function initFeatureModules() {
 }
 
 /* ==========================================================================
-   9. NATIVE WEB SHARE + FALLBACK SOCIAL MODAL
+   SHARE MODULE
    ========================================================================== */
 function initShareModule() {
   const btnShare = document.getElementById('btnSharePlatform');
-  if (btnShare) {
-    btnShare.addEventListener('click', () => shareQuincyPlatform());
-  }
+  if (btnShare) btnShare.addEventListener('click', () => shareQuincyPlatform());
 
-  // Close share modal handlers
   const shareModal = document.getElementById('shareModal');
   const btnCloseShare = document.getElementById('btnCloseShareModal');
-  if (btnCloseShare) {
-    btnCloseShare.addEventListener('click', () => shareModal?.classList.add('hidden'));
-  }
+  if (btnCloseShare) btnCloseShare.addEventListener('click', () => shareModal?.classList.add('hidden'));
   shareModal?.addEventListener('click', (e) => {
     if (e.target === shareModal) shareModal.classList.add('hidden');
   });
 
-  // Fallback social buttons
   document.getElementById('shareWhatsApp')?.addEventListener('click', () => {
     const text = encodeURIComponent('Join me on Quincy — intentional dating with verified singles and real proximity discovery! ' + window.location.href);
     window.open(`https://api.whatsapp.com/send?text=${text}`, '_blank', 'noopener');
@@ -1587,7 +1744,6 @@ function initShareModule() {
       await navigator.clipboard.writeText(window.location.href);
       showToast('Link copied to clipboard!');
     } catch {
-      // Fallback for older browsers
       const ta = document.createElement('textarea');
       ta.value = window.location.href;
       document.body.appendChild(ta);
@@ -1600,10 +1756,6 @@ function initShareModule() {
   });
 }
 
-/**
- * Primary share entry point — uses Web Share API when available,
- * otherwise opens the fallback social modal.
- */
 async function shareQuincyPlatform() {
   const shareData = {
     title: 'Quincy Dating Platform',
@@ -1616,11 +1768,9 @@ async function shareQuincyPlatform() {
       await navigator.share(shareData);
       return;
     } catch (err) {
-      // User cancelled or share failed — fall through to modal
       if (err.name === 'AbortError') return;
     }
   } else if (navigator.share) {
-    // Older implementations without canShare
     try {
       await navigator.share(shareData);
       return;
@@ -1629,12 +1779,11 @@ async function shareQuincyPlatform() {
     }
   }
 
-  // Fallback modal
   document.getElementById('shareModal')?.classList.remove('hidden');
 }
 
 /* ==========================================================================
-   10. MANUAL LOCATION FALLBACK
+   LOCATION FALLBACK
    ========================================================================== */
 const CITY_PRESETS = [
   { name: 'New York, NY', lat: 40.7128, lon: -74.0060 },
@@ -1656,9 +1805,7 @@ function initLocationFallback() {
   const btnClose = document.getElementById('btnCloseLocationFallback');
   const list = document.getElementById('locationPresetList');
 
-  if (btnClose) {
-    btnClose.addEventListener('click', () => modal?.classList.add('hidden'));
-  }
+  if (btnClose) btnClose.addEventListener('click', () => modal?.classList.add('hidden'));
   modal?.addEventListener('click', (e) => {
     if (e.target === modal) modal.classList.add('hidden');
   });
@@ -1680,7 +1827,6 @@ function initLocationFallback() {
     });
   }
 
-  // Retry geolocation button
   document.getElementById('btnRetryGeolocation')?.addEventListener('click', async () => {
     if (!currentUser) return;
     const coords = await requestGeolocation();

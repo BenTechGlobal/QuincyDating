@@ -3,6 +3,7 @@
 /**
  * Quincy Dating Platform — Interactive Client Logic
  * State-driven, localStorage-persisted, modular Vanilla JS
+ * Expanded: persistent auth, mutual matching, peer messaging, profile lifecycle
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -12,9 +13,11 @@ document.addEventListener('DOMContentLoaded', () => {
   initInteractiveSimulator();
   initMatchModal();
   initRegistration();
+  initLogin();
   initFeatureModules();
   initLikesDrawer();
   initManageProfile();
+  initMessages();
   updateUIForUser();
 });
 
@@ -24,6 +27,9 @@ document.addEventListener('DOMContentLoaded', () => {
 const STORAGE_PROFILES = 'quincy_registered_profiles';
 const STORAGE_LIKES = 'quincy_likes_received';
 const STORAGE_CURRENT_USER = 'quincy_current_user';
+const STORAGE_MATCHES = 'quincy_matches';
+const STORAGE_MESSAGES = 'quincy_messages';
+const STORAGE_SESSION = 'quincy_session_token';
 
 const defaultMockProfiles = [
   {
@@ -39,7 +45,9 @@ const defaultMockProfiles = [
     avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80",
     promptTag: "Relationship Goal",
     promptQuestion: "The key to a lasting partnership is...",
-    promptAnswer: "Intentional communication, space for individual growth, and agreeing on what weekend coffee spot is non-negotiable."
+    promptAnswer: "Intentional communication, space for individual growth, and agreeing on what weekend coffee spot is non-negotiable.",
+    email: null,
+    isMock: true
   },
   {
     id: 2,
@@ -54,7 +62,9 @@ const defaultMockProfiles = [
     avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80",
     promptTag: "Sunday Vibe",
     promptQuestion: "Together we could...",
-    promptAnswer: "Explore local farmers markets, spend hours arguing over book recommendations, and build a quiet life filled with deep conversations."
+    promptAnswer: "Explore local farmers markets, spend hours arguing over book recommendations, and build a quiet life filled with deep conversations.",
+    email: null,
+    isMock: true
   },
   {
     id: 3,
@@ -69,7 +79,9 @@ const defaultMockProfiles = [
     avatar: "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=300&q=80",
     promptTag: "Green Flags I Look For",
     promptQuestion: "I know we'll get along if...",
-    promptAnswer: "You value clarity over mind games, love long dinner table discussions, and treat hospitality as a core art form."
+    promptAnswer: "You value clarity over mind games, love long dinner table discussions, and treat hospitality as a core art form.",
+    email: null,
+    isMock: true
   },
   {
     id: 4,
@@ -84,7 +96,9 @@ const defaultMockProfiles = [
     avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=300&q=80",
     promptTag: "Dating Intent",
     promptQuestion: "I'm looking for someone who...",
-    promptAnswer: "Can hold space for both ambition and rest, and still make time for spontaneous road trips."
+    promptAnswer: "Can hold space for both ambition and rest, and still make time for spontaneous road trips.",
+    email: null,
+    isMock: true
   },
   {
     id: 5,
@@ -99,7 +113,9 @@ const defaultMockProfiles = [
     avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=300&q=80",
     promptTag: "Non-Negotiable",
     promptQuestion: "A dealbreaker for me is...",
-    promptAnswer: "Lack of curiosity. I need someone who asks questions and stays open to changing their mind."
+    promptAnswer: "Lack of curiosity. I need someone who asks questions and stays open to changing their mind.",
+    email: null,
+    isMock: true
   }
 ];
 
@@ -109,6 +125,7 @@ let currentProfileIndex = 0;
 let currentFilter = 'all';
 let maxDistance = 25;
 let currentUser = null;
+let activeChatMatchId = null;
 
 function loadFromStorage(key, fallback) {
   try {
@@ -123,15 +140,41 @@ function saveToStorage(key, value) {
   localStorage.setItem(key, JSON.stringify(value));
 }
 
+/** Simple client-side credential hash (demo only — not production-grade) */
+function hashCredential(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) - h) + str.charCodeAt(i);
+    h |= 0;
+  }
+  return 'qh_' + Math.abs(h).toString(36) + btoa(unescape(encodeURIComponent(str))).slice(0, 12);
+}
+
+function generateSessionToken(userId) {
+  return 'qs_' + userId + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
 function initState() {
   const registered = loadFromStorage(STORAGE_PROFILES, []);
   currentUser = loadFromStorage(STORAGE_CURRENT_USER, null);
-  allProfiles = [...defaultMockProfiles, ...registered];
+
+  // Validate session token
+  if (currentUser) {
+    const session = loadFromStorage(STORAGE_SESSION, null);
+    if (!session || session.userId !== currentUser.id || session.token !== currentUser.sessionToken) {
+      currentUser = null;
+      localStorage.removeItem(STORAGE_CURRENT_USER);
+      localStorage.removeItem(STORAGE_SESSION);
+    }
+  }
+
+  allProfiles = [...defaultMockProfiles, ...registered.filter(p => !p.isMock)];
   applyFilters();
 }
 
 function applyFilters() {
   filteredProfiles = allProfiles.filter(p => {
+    if (currentUser && p.id === currentUser.id) return false;
     const distOk = (p.distanceNum || parseFloat(p.distance) || 99) <= maxDistance;
     if (!distOk) return false;
     if (currentFilter === 'all') return true;
@@ -254,12 +297,17 @@ function renderCurrentCard() {
     ? '<span class="verified-badge" title="ID Verified" style="display:inline-flex;width:16px;height:16px;background:#3B82F6;color:white;border-radius:50%;font-size:0.65rem;align-items:center;justify-content:center;margin-left:4px;">✓</span>'
     : '';
 
+  const isRegistered = !profile.isMock;
+  const regBadge = isRegistered
+    ? '<span class="live-user-badge" title="Live registered user">Live</span>'
+    : '';
+
   cardStack.innerHTML = `
     <div class="sim-profile-card" id="currentSimCard">
       <div class="sim-card-header">
         <img src="${profile.avatar}" alt="${profile.name}" class="sim-avatar" />
         <div class="sim-details">
-          <h3>${profile.name}, ${profile.age} ${verifiedBadge}</h3>
+          <h3>${profile.name}, ${profile.age} ${verifiedBadge} ${regBadge}</h3>
           <p class="sim-meta">${profile.occupation} • ${profile.distance}</p>
         </div>
         <div class="sim-match-pill">${profile.matchScore}</div>
@@ -291,9 +339,9 @@ function handleSimAction(action) {
       card.classList.add('swipe-right');
       spawnHeartBurst(card);
     }
-    recordLike(currentProfile);
+    const isMutual = recordLike(currentProfile);
     setTimeout(() => {
-      triggerMatchCelebration(currentProfile);
+      triggerMatchCelebration(currentProfile, isMutual);
     }, 280);
   } else {
     if (card) card.classList.add('swipe-left');
@@ -343,6 +391,7 @@ function updateStatusText(custom) {
 function initMatchModal() {
   const btnClose = document.getElementById('btnCloseMatchModal');
   const matchModal = document.getElementById('matchModal');
+  const btnStartChat = document.getElementById('btnStartChatFromMatch');
 
   if (btnClose) {
     btnClose.addEventListener('click', () => {
@@ -351,21 +400,55 @@ function initMatchModal() {
       advanceProfile();
     });
   }
+
+  if (btnStartChat) {
+    btnStartChat.addEventListener('click', () => {
+      matchModal.classList.add('hidden');
+      const matchId = btnStartChat.dataset.matchId;
+      if (matchId) {
+        openChatWithMatch(matchId);
+      }
+    });
+  }
 }
 
-function triggerMatchCelebration(profile) {
+function triggerMatchCelebration(profile, isMutual = false) {
   const matchModal = document.getElementById('matchModal');
   const matchNameHeading = document.getElementById('matchNameHeading');
   const matchTargetAvatar = document.getElementById('matchTargetAvatar');
   const firstMove = document.getElementById('firstMoveIndicator');
   const userAvatar = document.getElementById('matchUserAvatar');
+  const mutualBanner = document.getElementById('mutualMatchBanner');
+  const btnStartChat = document.getElementById('btnStartChatFromMatch');
 
   if (matchNameHeading) matchNameHeading.innerText = `You & ${profile.name} Connected!`;
   if (matchTargetAvatar) matchTargetAvatar.src = profile.avatar;
   if (currentUser && userAvatar) {
     userAvatar.src = currentUser.avatar;
+  } else if (userAvatar) {
+    userAvatar.src = 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=200&q=80';
   }
-  if (firstMove) firstMove.classList.remove('hidden');
+
+  if (isMutual) {
+    if (firstMove) firstMove.classList.add('hidden');
+    if (mutualBanner) {
+      mutualBanner.classList.remove('hidden');
+      mutualBanner.textContent = 'Mutual Match! You can now message each other.';
+    }
+    if (btnStartChat) {
+      btnStartChat.classList.remove('hidden');
+      const matches = loadFromStorage(STORAGE_MATCHES, []);
+      const match = matches.find(m =>
+        (m.userA === currentUser?.id && m.userB === profile.id) ||
+        (m.userB === currentUser?.id && m.userA === profile.id)
+      );
+      if (match) btnStartChat.dataset.matchId = match.id;
+    }
+  } else {
+    if (firstMove) firstMove.classList.remove('hidden');
+    if (mutualBanner) mutualBanner.classList.add('hidden');
+    if (btnStartChat) btnStartChat.classList.add('hidden');
+  }
 
   matchModal.classList.remove('hidden');
 }
@@ -382,7 +465,7 @@ function spawnHeartBurst(container) {
 }
 
 /* ==========================================================================
-   5. REGISTRATION & PROFILE MANAGEMENT
+   5. REGISTRATION, LOGIN & PROFILE MANAGEMENT
    ========================================================================== */
 function initRegistration() {
   const modal = document.getElementById('registerModal');
@@ -390,15 +473,32 @@ function initRegistration() {
   const btnOpen = document.getElementById('btnOpenRegister');
   const btnHero = document.getElementById('btnHeroRegister');
   const btnCancel = document.getElementById('btnCancelRegister');
+  const switchToLogin = document.getElementById('switchToLogin');
 
-  const open = () => modal.classList.remove('hidden');
+  const open = () => {
+    modal.classList.remove('hidden');
+    document.querySelectorAll('.field-error').forEach(el => el.textContent = '');
+  };
   const close = () => modal.classList.add('hidden');
 
-  if (btnOpen) btnOpen.addEventListener('click', open);
+  if (btnOpen) btnOpen.addEventListener('click', () => {
+    if (currentUser) {
+      openEditProfile();
+    } else {
+      open();
+    }
+  });
   if (btnHero) btnHero.addEventListener('click', open);
   if (btnCancel) btnCancel.addEventListener('click', close);
 
-  // Avatar presets
+  if (switchToLogin) {
+    switchToLogin.addEventListener('click', (e) => {
+      e.preventDefault();
+      close();
+      document.getElementById('loginModal')?.classList.remove('hidden');
+    });
+  }
+
   document.querySelectorAll('.avatar-preset').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.avatar-preset').forEach(b => b.classList.remove('active'));
@@ -413,9 +513,20 @@ function initRegistration() {
 
     const profile = buildProfileFromForm();
     const registered = loadFromStorage(STORAGE_PROFILES, []);
+
+    if (registered.some(p => p.email && p.email.toLowerCase() === profile.email.toLowerCase())) {
+      const errEl = document.getElementById('errEmail');
+      if (errEl) errEl.textContent = 'An account with this email already exists. Please log in.';
+      return;
+    }
+
     registered.push(profile);
     saveToStorage(STORAGE_PROFILES, registered);
+
+    const token = generateSessionToken(profile.id);
+    profile.sessionToken = token;
     saveToStorage(STORAGE_CURRENT_USER, profile);
+    saveToStorage(STORAGE_SESSION, { userId: profile.id, token });
     currentUser = profile;
 
     allProfiles = [...defaultMockProfiles, ...registered];
@@ -423,7 +534,7 @@ function initRegistration() {
     renderCurrentCard();
     updateUIForUser();
     close();
-    showToast(`Welcome, ${profile.name}! Your profile is live.`);
+    showToast(`Welcome, ${profile.name}! Your profile is live and discoverable.`);
   });
 }
 
@@ -431,7 +542,7 @@ function validateRegistrationForm() {
   let valid = true;
   const clear = (id) => {
     const el = document.getElementById(id);
-    if (el) { el.textContent = ''; el.previousElementSibling?.classList.remove('invalid'); }
+    if (el) { el.textContent = ''; }
   };
   const err = (id, msg) => {
     const el = document.getElementById(id);
@@ -439,7 +550,7 @@ function validateRegistrationForm() {
     valid = false;
   };
 
-  ['errName','errAge','errOccupation','errIntent','errAvatar','errPromptQuestion','errPromptAnswer'].forEach(clear);
+  ['errName','errAge','errOccupation','errIntent','errAvatar','errPromptQuestion','errPromptAnswer','errEmail','errPassword'].forEach(clear);
 
   const name = document.getElementById('regName').value.trim();
   const age = parseInt(document.getElementById('regAge').value, 10);
@@ -448,6 +559,8 @@ function validateRegistrationForm() {
   const avatar = document.getElementById('regAvatar').value.trim();
   const q = document.getElementById('regPromptQuestion').value.trim();
   const a = document.getElementById('regPromptAnswer').value.trim();
+  const email = document.getElementById('regEmail')?.value.trim() || '';
+  const password = document.getElementById('regPassword')?.value || '';
 
   if (!name || name.length < 2) {
     err('errName', 'Please enter a valid name (2+ characters).');
@@ -477,6 +590,14 @@ function validateRegistrationForm() {
     err('errPromptAnswer', 'Please write a meaningful answer (10+ characters).');
     document.getElementById('regPromptAnswer').classList.add('invalid');
   }
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    err('errEmail', 'Please enter a valid email address.');
+    document.getElementById('regEmail')?.classList.add('invalid');
+  }
+  if (!password || password.length < 6) {
+    err('errPassword', 'Password must be at least 6 characters.');
+    document.getElementById('regPassword')?.classList.add('invalid');
+  }
 
   return valid;
 }
@@ -494,6 +615,8 @@ function buildProfileFromForm() {
   const promptTag = document.getElementById('regPromptTag').value;
   const promptQuestion = document.getElementById('regPromptQuestion').value.trim();
   const promptAnswer = document.getElementById('regPromptAnswer').value.trim();
+  const email = document.getElementById('regEmail').value.trim().toLowerCase();
+  const password = document.getElementById('regPassword').value;
 
   const dist = (Math.random() * 4 + 0.8).toFixed(1);
   const score = Math.floor(Math.random() * 8 + 90);
@@ -512,21 +635,115 @@ function buildProfileFromForm() {
     promptTag,
     promptQuestion,
     promptAnswer,
-    isUser: true
+    email,
+    passwordHash: hashCredential(password),
+    isUser: true,
+    isMock: false,
+    createdAt: new Date().toISOString()
   };
 }
 
+/* ---------- Login ---------- */
+function initLogin() {
+  const modal = document.getElementById('loginModal');
+  const form = document.getElementById('loginForm');
+  const btnOpen = document.getElementById('btnOpenLogin');
+  const btnCancel = document.getElementById('btnCancelLogin');
+  const switchToRegister = document.getElementById('switchToRegister');
+
+  if (btnOpen) {
+    btnOpen.addEventListener('click', () => modal?.classList.remove('hidden'));
+  }
+  if (btnCancel) {
+    btnCancel.addEventListener('click', () => modal?.classList.add('hidden'));
+  }
+  if (switchToRegister) {
+    switchToRegister.addEventListener('click', (e) => {
+      e.preventDefault();
+      modal?.classList.add('hidden');
+      document.getElementById('registerModal')?.classList.remove('hidden');
+    });
+  }
+
+  if (form) {
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const email = document.getElementById('loginEmail').value.trim().toLowerCase();
+      const password = document.getElementById('loginPassword').value;
+      const errEl = document.getElementById('loginError');
+
+      if (!email || !password) {
+        if (errEl) errEl.textContent = 'Email and password are required.';
+        return;
+      }
+
+      const registered = loadFromStorage(STORAGE_PROFILES, []);
+      const user = registered.find(p => p.email === email);
+
+      if (!user || user.passwordHash !== hashCredential(password)) {
+        if (errEl) errEl.textContent = 'Invalid email or password.';
+        return;
+      }
+
+      const token = generateSessionToken(user.id);
+      user.sessionToken = token;
+      const idx = registered.findIndex(p => p.id === user.id);
+      if (idx !== -1) {
+        registered[idx] = user;
+        saveToStorage(STORAGE_PROFILES, registered);
+      }
+      saveToStorage(STORAGE_CURRENT_USER, user);
+      saveToStorage(STORAGE_SESSION, { userId: user.id, token });
+      currentUser = user;
+
+      allProfiles = [...defaultMockProfiles, ...registered];
+      applyFilters();
+      renderCurrentCard();
+      updateUIForUser();
+      modal.classList.add('hidden');
+      showToast(`Welcome back, ${user.name}!`);
+    });
+  }
+}
+
+/* ---------- Profile Edit / Erase ---------- */
 function initManageProfile() {
-  const btn = document.getElementById('btnManageProfile');
   const eraseModal = document.getElementById('eraseConfirmModal');
   const btnConfirm = document.getElementById('btnConfirmErase');
   const btnCancel = document.getElementById('btnCancelErase');
+  const btnLogout = document.getElementById('btnLogout');
+  const btnEditProfile = document.getElementById('btnEditProfile');
+  const btn = document.getElementById('btnManageProfile');
 
   if (btn) {
     btn.addEventListener('click', () => {
-      eraseModal.classList.remove('hidden');
+      const managePanel = document.getElementById('manageProfilePanel');
+      if (managePanel) managePanel.classList.remove('hidden');
+      else eraseModal.classList.remove('hidden');
     });
   }
+
+  if (btnEditProfile) {
+    btnEditProfile.addEventListener('click', () => {
+      document.getElementById('manageProfilePanel')?.classList.add('hidden');
+      openEditProfile();
+    });
+  }
+
+  if (btnLogout) {
+    btnLogout.addEventListener('click', () => {
+      logoutUser();
+      document.getElementById('manageProfilePanel')?.classList.add('hidden');
+    });
+  }
+
+  const btnCloseManage = document.getElementById('btnCloseManagePanel');
+  if (btnCloseManage) {
+    btnCloseManage.addEventListener('click', () => {
+      document.getElementById('manageProfilePanel')?.classList.add('hidden');
+    });
+  }
+
   if (btnCancel) {
     btnCancel.addEventListener('click', () => eraseModal.classList.add('hidden'));
   }
@@ -537,6 +754,7 @@ function initManageProfile() {
       registered = registered.filter(p => p.id !== currentUser.id);
       saveToStorage(STORAGE_PROFILES, registered);
       localStorage.removeItem(STORAGE_CURRENT_USER);
+      localStorage.removeItem(STORAGE_SESSION);
       currentUser = null;
 
       allProfiles = [...defaultMockProfiles, ...registered];
@@ -544,26 +762,127 @@ function initManageProfile() {
       renderCurrentCard();
       updateUIForUser();
       eraseModal.classList.add('hidden');
+      document.getElementById('manageProfilePanel')?.classList.add('hidden');
       showToast('Your profile has been permanently erased.');
     });
   }
+
+  const btnEraseFromManage = document.getElementById('btnEraseFromManage');
+  if (btnEraseFromManage) {
+    btnEraseFromManage.addEventListener('click', () => {
+      document.getElementById('manageProfilePanel')?.classList.add('hidden');
+      eraseModal.classList.remove('hidden');
+    });
+  }
+}
+
+function openEditProfile() {
+  if (!currentUser) return;
+  const modal = document.getElementById('editProfileModal');
+  if (!modal) return;
+
+  document.getElementById('editName').value = currentUser.name || '';
+  document.getElementById('editAge').value = currentUser.age || '';
+  document.getElementById('editOccupation').value = currentUser.occupation || '';
+  document.getElementById('editIntent').value = currentUser.intent || '';
+  document.getElementById('editAvatar').value = currentUser.avatar || '';
+  document.getElementById('editPromptTag').value = currentUser.promptTag || 'Relationship Goal';
+  document.getElementById('editPromptQuestion').value = currentUser.promptQuestion || '';
+  document.getElementById('editPromptAnswer').value = currentUser.promptAnswer || '';
+  document.getElementById('editVerified').checked = !!currentUser.verified;
+
+  modal.classList.remove('hidden');
+}
+
+function saveEditedProfile() {
+  if (!currentUser) return;
+
+  const name = document.getElementById('editName').value.trim();
+  const age = parseInt(document.getElementById('editAge').value, 10);
+  const occupation = document.getElementById('editOccupation').value.trim();
+  const intent = document.getElementById('editIntent').value;
+  const avatar = document.getElementById('editAvatar').value.trim() || currentUser.avatar;
+  const promptTag = document.getElementById('editPromptTag').value;
+  const promptQuestion = document.getElementById('editPromptQuestion').value.trim();
+  const promptAnswer = document.getElementById('editPromptAnswer').value.trim();
+  const verified = document.getElementById('editVerified').checked;
+
+  if (!name || name.length < 2 || isNaN(age) || age < 18 || !occupation || !intent || !promptQuestion || promptAnswer.length < 10) {
+    showToast('Please fill all required fields correctly.');
+    return;
+  }
+
+  currentUser.name = name;
+  currentUser.age = age;
+  currentUser.occupation = occupation;
+  currentUser.intent = intent;
+  currentUser.avatar = avatar;
+  currentUser.promptTag = promptTag;
+  currentUser.promptQuestion = promptQuestion;
+  currentUser.promptAnswer = promptAnswer;
+  currentUser.verified = verified;
+
+  let registered = loadFromStorage(STORAGE_PROFILES, []);
+  const idx = registered.findIndex(p => p.id === currentUser.id);
+  if (idx !== -1) {
+    registered[idx] = { ...registered[idx], ...currentUser };
+    saveToStorage(STORAGE_PROFILES, registered);
+  }
+  saveToStorage(STORAGE_CURRENT_USER, currentUser);
+
+  allProfiles = [...defaultMockProfiles, ...registered];
+  applyFilters();
+  renderCurrentCard();
+  updateUIForUser();
+  document.getElementById('editProfileModal')?.classList.add('hidden');
+  showToast('Profile updated successfully.');
+}
+
+function logoutUser() {
+  localStorage.removeItem(STORAGE_CURRENT_USER);
+  localStorage.removeItem(STORAGE_SESSION);
+  currentUser = null;
+  applyFilters();
+  renderCurrentCard();
+  updateUIForUser();
+  showToast('You have been logged out.');
 }
 
 function updateUIForUser() {
   const manageBtn = document.getElementById('btnManageProfile');
   const regBtn = document.getElementById('btnOpenRegister');
+  const loginBtn = document.getElementById('btnOpenLogin');
+  const messagesBtn = document.getElementById('btnOpenMessages');
+  const userChip = document.getElementById('navUserChip');
+
   if (currentUser) {
     if (manageBtn) manageBtn.classList.remove('hidden');
-    if (regBtn) regBtn.textContent = 'Your Profile ✓';
+    if (regBtn) {
+      regBtn.textContent = 'Edit Profile';
+      regBtn.classList.remove('btn-glow');
+    }
+    if (loginBtn) loginBtn.classList.add('hidden');
+    if (messagesBtn) messagesBtn.classList.remove('hidden');
+    if (userChip) {
+      userChip.classList.remove('hidden');
+      userChip.innerHTML = `<img src="${currentUser.avatar}" alt="" class="nav-user-avatar" /><span>${currentUser.name}</span>`;
+    }
   } else {
     if (manageBtn) manageBtn.classList.add('hidden');
-    if (regBtn) regBtn.textContent = 'Try Demo / Register';
+    if (regBtn) {
+      regBtn.textContent = 'Try Demo / Register';
+      regBtn.classList.add('btn-glow');
+    }
+    if (loginBtn) loginBtn.classList.remove('hidden');
+    if (messagesBtn) messagesBtn.classList.add('hidden');
+    if (userChip) userChip.classList.add('hidden');
   }
   updateLikesBadge();
+  updateMessagesBadge();
 }
 
 /* ==========================================================================
-   6. LIKES TRACKING & DRAWER
+   6. LIKES TRACKING, MUTUAL MATCHES & DRAWER
    ========================================================================== */
 function recordLike(targetProfile, isPromptOnly = false) {
   const likes = loadFromStorage(STORAGE_LIKES, []);
@@ -578,10 +897,54 @@ function recordLike(targetProfile, isPromptOnly = false) {
     isPromptOnly
   };
   likes.unshift(entry);
-  // Keep last 50
-  if (likes.length > 50) likes.length = 50;
+  if (likes.length > 100) likes.length = 100;
   saveToStorage(STORAGE_LIKES, likes);
   updateLikesBadge();
+
+  let isMutual = false;
+  if (currentUser && !targetProfile.isMock) {
+    const reverseLike = likes.find(l =>
+      l.likedByUserId === targetProfile.id &&
+      l.targetUserId === currentUser.id &&
+      !l.isPromptOnly
+    );
+    if (reverseLike) {
+      isMutual = true;
+      createMatch(currentUser, targetProfile);
+    }
+  }
+
+  // Demo: intentional like on mock profile while logged in creates soft mutual for messaging
+  if (currentUser && targetProfile.isMock && !isPromptOnly) {
+    isMutual = true;
+    createMatch(currentUser, targetProfile, true);
+  }
+
+  return isMutual;
+}
+
+function createMatch(userA, userB, isSoft = false) {
+  const matches = loadFromStorage(STORAGE_MATCHES, []);
+  const exists = matches.some(m =>
+    (m.userA === userA.id && m.userB === userB.id) ||
+    (m.userB === userA.id && m.userA === userB.id)
+  );
+  if (exists) return;
+
+  const match = {
+    id: 'match_' + Date.now(),
+    userA: userA.id,
+    userB: userB.id,
+    userAName: userA.name,
+    userBName: userB.name,
+    userAAvatar: userA.avatar,
+    userBAvatar: userB.avatar,
+    createdAt: new Date().toISOString(),
+    isSoft
+  };
+  matches.unshift(match);
+  saveToStorage(STORAGE_MATCHES, matches);
+  updateMessagesBadge();
 }
 
 function initLikesDrawer() {
@@ -598,7 +961,6 @@ function initLikesDrawer() {
   if (btnClose) {
     btnClose.addEventListener('click', () => drawer.classList.add('hidden'));
   }
-  // Click outside panel to close
   drawer?.addEventListener('click', (e) => {
     if (e.target === drawer) drawer.classList.add('hidden');
   });
@@ -609,7 +971,6 @@ function renderLikesList() {
   const empty = document.getElementById('likesEmpty');
   const likes = loadFromStorage(STORAGE_LIKES, []);
 
-  // Show likes directed at the current user, or all recent likes if guest
   let relevant = likes;
   if (currentUser) {
     relevant = likes.filter(l => l.targetUserId === currentUser.id || l.likedByUserId === currentUser.id);
@@ -636,7 +997,9 @@ function updateLikesBadge() {
   const badge = document.getElementById('likesBadge');
   if (!badge) return;
   const likes = loadFromStorage(STORAGE_LIKES, []);
-  const count = likes.length;
+  const count = currentUser
+    ? likes.filter(l => l.targetUserId === currentUser.id).length
+    : likes.length;
   if (count > 0) {
     badge.textContent = count > 9 ? '9+' : count;
     badge.classList.remove('hidden');
@@ -660,10 +1023,190 @@ function formatTime(iso) {
 }
 
 /* ==========================================================================
-   7. FEATURE MODULES (Audio, Proximity Slider, Inline Likes)
+   7. MESSAGING SYSTEM
+   ========================================================================== */
+function initMessages() {
+  const drawer = document.getElementById('messagesDrawer');
+  const btnOpen = document.getElementById('btnOpenMessages');
+  const btnClose = document.getElementById('btnCloseMessages');
+  const chatForm = document.getElementById('chatForm');
+  const btnBackToMatches = document.getElementById('btnBackToMatches');
+
+  if (btnOpen) {
+    btnOpen.addEventListener('click', () => {
+      renderMatchesList();
+      drawer?.classList.remove('hidden');
+      document.getElementById('matchesListView')?.classList.remove('hidden');
+      document.getElementById('chatView')?.classList.add('hidden');
+    });
+  }
+  if (btnClose) {
+    btnClose.addEventListener('click', () => drawer?.classList.add('hidden'));
+  }
+  drawer?.addEventListener('click', (e) => {
+    if (e.target === drawer) drawer.classList.add('hidden');
+  });
+
+  if (btnBackToMatches) {
+    btnBackToMatches.addEventListener('click', () => {
+      document.getElementById('matchesListView')?.classList.remove('hidden');
+      document.getElementById('chatView')?.classList.add('hidden');
+      activeChatMatchId = null;
+    });
+  }
+
+  if (chatForm) {
+    chatForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      sendChatMessage();
+    });
+  }
+
+  const btnSaveEdit = document.getElementById('btnSaveEditProfile');
+  if (btnSaveEdit) {
+    btnSaveEdit.addEventListener('click', saveEditedProfile);
+  }
+  const btnCancelEdit = document.getElementById('btnCancelEditProfile');
+  if (btnCancelEdit) {
+    btnCancelEdit.addEventListener('click', () => {
+      document.getElementById('editProfileModal')?.classList.add('hidden');
+    });
+  }
+}
+
+function getMatchesForCurrentUser() {
+  if (!currentUser) return [];
+  const matches = loadFromStorage(STORAGE_MATCHES, []);
+  return matches.filter(m => m.userA === currentUser.id || m.userB === currentUser.id);
+}
+
+function renderMatchesList() {
+  const list = document.getElementById('matchesList');
+  const empty = document.getElementById('matchesEmpty');
+  const matches = getMatchesForCurrentUser();
+
+  if (!matches.length) {
+    if (list) list.innerHTML = '';
+    if (empty) empty.classList.remove('hidden');
+    return;
+  }
+  if (empty) empty.classList.add('hidden');
+
+  list.innerHTML = matches.map(m => {
+    const isA = m.userA === currentUser.id;
+    const otherName = isA ? m.userBName : m.userAName;
+    const otherAvatar = isA ? m.userBAvatar : m.userAAvatar;
+    const lastMsg = getLastMessage(m.id);
+    return `
+      <div class="match-item" onclick="openChatWithMatch('${m.id}')">
+        <img src="${otherAvatar}" alt="" />
+        <div class="match-item-info">
+          <h4>${otherName}</h4>
+          <p>${lastMsg ? escapeHtml(lastMsg.text).slice(0, 40) + (lastMsg.text.length > 40 ? '…' : '') : 'Say hello!'}</p>
+        </div>
+        <span class="match-time">${formatTime(lastMsg ? lastMsg.timestamp : m.createdAt)}</span>
+      </div>
+    `;
+  }).join('');
+}
+
+function getLastMessage(matchId) {
+  const messages = loadFromStorage(STORAGE_MESSAGES, {});
+  const thread = messages[matchId] || [];
+  return thread.length ? thread[thread.length - 1] : null;
+}
+
+function openChatWithMatch(matchId) {
+  if (!currentUser) {
+    showToast('Please log in to message matches.');
+    return;
+  }
+  activeChatMatchId = matchId;
+  const matches = loadFromStorage(STORAGE_MATCHES, []);
+  const match = matches.find(m => m.id === matchId);
+  if (!match) return;
+
+  const isA = match.userA === currentUser.id;
+  const otherName = isA ? match.userBName : match.userAName;
+  const otherAvatar = isA ? match.userBAvatar : match.userAAvatar;
+
+  document.getElementById('chatPartnerName').textContent = otherName;
+  document.getElementById('chatPartnerAvatar').src = otherAvatar;
+
+  renderChatThread(matchId);
+
+  document.getElementById('matchesListView')?.classList.add('hidden');
+  document.getElementById('chatView')?.classList.remove('hidden');
+  document.getElementById('messagesDrawer')?.classList.remove('hidden');
+}
+
+function renderChatThread(matchId) {
+  const container = document.getElementById('chatMessages');
+  if (!container) return;
+  const messages = loadFromStorage(STORAGE_MESSAGES, {});
+  const thread = messages[matchId] || [];
+
+  if (!thread.length) {
+    container.innerHTML = `<p class="chat-empty">No messages yet. Start the conversation with an intentional opener.</p>`;
+    return;
+  }
+
+  container.innerHTML = thread.map(msg => {
+    const isMine = msg.senderId === currentUser.id;
+    return `
+      <div class="chat-bubble ${isMine ? 'mine' : 'theirs'}">
+        <p>${escapeHtml(msg.text)}</p>
+        <span class="chat-time">${formatTime(msg.timestamp)}</span>
+      </div>
+    `;
+  }).join('');
+  container.scrollTop = container.scrollHeight;
+}
+
+function sendChatMessage() {
+  if (!activeChatMatchId || !currentUser) return;
+  const input = document.getElementById('chatInput');
+  const text = input?.value.trim();
+  if (!text) return;
+
+  const messages = loadFromStorage(STORAGE_MESSAGES, {});
+  if (!messages[activeChatMatchId]) messages[activeChatMatchId] = [];
+
+  messages[activeChatMatchId].push({
+    id: 'msg_' + Date.now(),
+    senderId: currentUser.id,
+    senderName: currentUser.name,
+    text,
+    timestamp: new Date().toISOString()
+  });
+  saveToStorage(STORAGE_MESSAGES, messages);
+  input.value = '';
+  renderChatThread(activeChatMatchId);
+  updateMessagesBadge();
+}
+
+function updateMessagesBadge() {
+  const badge = document.getElementById('messagesBadge');
+  if (!badge) return;
+  const matches = getMatchesForCurrentUser();
+  if (matches.length > 0) {
+    badge.textContent = matches.length > 9 ? '9+' : matches.length;
+    badge.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+  }
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+/* ==========================================================================
+   8. FEATURE MODULES (Audio, Proximity Slider, Inline Likes)
    ========================================================================== */
 function initFeatureModules() {
-  // Audio player simulation
   const playBtn = document.getElementById('audioPlayBtn');
   const player = document.querySelector('.audio-player');
   let playing = false;
@@ -676,7 +1219,6 @@ function initFeatureModules() {
         playBtn.textContent = '❚❚';
         playBtn.classList.add('playing');
         player.classList.add('playing');
-        // Simulate 4s clip
         timer = setTimeout(() => {
           playing = false;
           playBtn.textContent = '▶';
@@ -692,7 +1234,6 @@ function initFeatureModules() {
     });
   }
 
-  // Proximity slider
   const slider = document.getElementById('proximitySlider');
   const valueLabel = document.getElementById('proximityValue');
   if (slider) {
@@ -705,13 +1246,12 @@ function initFeatureModules() {
     });
   }
 
-  // Hero card inline like
   document.querySelectorAll('.proto-prompt-box .inline-like-btn').forEach(btn => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       btn.classList.add('liked');
       btn.textContent = '♥ Liked';
-      showToast('You liked Sophia\'s prompt!');
+      showToast("You liked Sophia's prompt!");
     });
   });
 }
@@ -728,7 +1268,7 @@ function showToast(msg) {
   toast._timer = setTimeout(() => toast.classList.add('hidden'), 2800);
 }
 
-// Expose for inline onclick handlers
 window.handleSimAction = handleSimAction;
 window.handleInlineLike = handleInlineLike;
 window.resetSim = resetSim;
+window.openChatWithMatch = openChatWithMatch;

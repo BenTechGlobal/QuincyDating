@@ -3,7 +3,7 @@
 /**
  * Quincy Dating Platform — Interactive Client Logic
  * State-driven, localStorage-persisted, modular Vanilla JS
- * Expanded: persistent auth, mutual matching, peer messaging, profile lifecycle
+ * Fully dynamic: only real registered user profiles (no hardcoded mocks)
  */
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -30,94 +30,6 @@ const STORAGE_CURRENT_USER = 'quincy_current_user';
 const STORAGE_MATCHES = 'quincy_matches';
 const STORAGE_MESSAGES = 'quincy_messages';
 const STORAGE_SESSION = 'quincy_session_token';
-
-const defaultMockProfiles = [
-  {
-    id: 1,
-    name: "Maya",
-    age: 27,
-    occupation: "Architect & Designer",
-    distance: "1.8 miles away",
-    distanceNum: 1.8,
-    matchScore: "98% Match",
-    intent: "marriage",
-    verified: true,
-    avatar: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80",
-    promptTag: "Relationship Goal",
-    promptQuestion: "The key to a lasting partnership is...",
-    promptAnswer: "Intentional communication, space for individual growth, and agreeing on what weekend coffee spot is non-negotiable.",
-    email: null,
-    isMock: true
-  },
-  {
-    id: 2,
-    name: "Marcus",
-    age: 29,
-    occupation: "Software Lead",
-    distance: "3.2 miles away",
-    distanceNum: 3.2,
-    matchScore: "94% Match",
-    intent: "marriage",
-    verified: true,
-    avatar: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80",
-    promptTag: "Sunday Vibe",
-    promptQuestion: "Together we could...",
-    promptAnswer: "Explore local farmers markets, spend hours arguing over book recommendations, and build a quiet life filled with deep conversations.",
-    email: null,
-    isMock: true
-  },
-  {
-    id: 3,
-    name: "Elena",
-    age: 26,
-    occupation: "Biomedical Researcher",
-    distance: "2.4 miles away",
-    distanceNum: 2.4,
-    matchScore: "96% Match",
-    intent: "verified",
-    verified: true,
-    avatar: "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=300&q=80",
-    promptTag: "Green Flags I Look For",
-    promptQuestion: "I know we'll get along if...",
-    promptAnswer: "You value clarity over mind games, love long dinner table discussions, and treat hospitality as a core art form.",
-    email: null,
-    isMock: true
-  },
-  {
-    id: 4,
-    name: "Jordan",
-    age: 31,
-    occupation: "Product Manager",
-    distance: "8.5 miles away",
-    distanceNum: 8.5,
-    matchScore: "91% Match",
-    intent: "long-term",
-    verified: true,
-    avatar: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=300&q=80",
-    promptTag: "Dating Intent",
-    promptQuestion: "I'm looking for someone who...",
-    promptAnswer: "Can hold space for both ambition and rest, and still make time for spontaneous road trips.",
-    email: null,
-    isMock: true
-  },
-  {
-    id: 5,
-    name: "Alex",
-    age: 28,
-    occupation: "UX Researcher",
-    distance: "12.1 miles away",
-    distanceNum: 12.1,
-    matchScore: "89% Match",
-    intent: "marriage",
-    verified: false,
-    avatar: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=300&q=80",
-    promptTag: "Non-Negotiable",
-    promptQuestion: "A dealbreaker for me is...",
-    promptAnswer: "Lack of curiosity. I need someone who asks questions and stays open to changing their mind.",
-    email: null,
-    isMock: true
-  }
-];
 
 let allProfiles = [];
 let filteredProfiles = [];
@@ -154,6 +66,10 @@ function generateSessionToken(userId) {
   return 'qs_' + userId + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
+/**
+ * Initialize application state exclusively from registered (real) users.
+ * No hardcoded mock profiles are loaded into the discovery pool.
+ */
 function initState() {
   const registered = loadFromStorage(STORAGE_PROFILES, []);
   currentUser = loadFromStorage(STORAGE_CURRENT_USER, null);
@@ -168,10 +84,14 @@ function initState() {
     }
   }
 
-  allProfiles = [...defaultMockProfiles, ...registered.filter(p => !p.isMock)];
+  // Populate system strictly with live registered profiles
+  allProfiles = registered.filter(p => !p.isMock);
   applyFilters();
 }
 
+/**
+ * Filter pipeline: exclude self, enforce distance, apply intent/verified filters.
+ */
 function applyFilters() {
   filteredProfiles = allProfiles.filter(p => {
     if (currentUser && p.id === currentUser.id) return false;
@@ -277,19 +197,40 @@ function initInteractiveSimulator() {
   });
 }
 
+/**
+ * Render the current discovery card.
+ * When no real registered profiles match filters, show a high-conversion empty state.
+ */
 function renderCurrentCard() {
   const cardStack = document.getElementById('simCardStack');
   const profile = filteredProfiles[currentProfileIndex];
 
   if (!profile) {
+    const hasAnyRegistered = allProfiles.length > 0;
     cardStack.innerHTML = `
-      <div class="sim-profile-card text-center" style="padding: 40px;">
-        <h3>All Catchup Complete!</h3>
-        <p style="color: var(--text-muted); margin: 12px 0 20px;">You've previewed all nearby value-matched profiles in your current radar.</p>
-        <button class="btn btn-primary" onclick="resetSim()">Restart Preview Stack</button>
+      <div class="sim-profile-card empty-state-card text-center" style="padding: 40px;">
+        <div class="empty-state-icon" aria-hidden="true">♥</div>
+        <h3>${hasAnyRegistered ? 'No matches in this radar' : 'No active profiles nearby yet'}</h3>
+        <p style="color: var(--text-muted); margin: 12px 0 24px; line-height: 1.5;">
+          ${hasAnyRegistered
+            ? 'Try widening the proximity slider or switching filters. Or invite friends to join Quincy.'
+            : 'Be the first intentional single in your area. Create a profile and start attracting real matches.'}
+        </p>
+        <div class="empty-state-actions">
+          <button class="btn btn-primary btn-glow" onclick="document.getElementById('btnHeroRegister')?.click() || document.getElementById('btnOpenRegister')?.click()">
+            ${currentUser ? 'Invite Others / Share' : 'Register Your Profile'}
+          </button>
+          ${hasAnyRegistered ? `
+            <button class="btn btn-outline" onclick="resetSimFilters()">Reset Filters & Distance</button>
+          ` : ''}
+        </div>
       </div>
     `;
-    updateStatusText('No more profiles in range. Adjust distance or filters.');
+    updateStatusText(
+      hasAnyRegistered
+        ? 'No profiles match your current filters or distance. Adjust and try again.'
+        : 'Be the first to register — your profile will appear here for others to discover.'
+    );
     return;
   }
 
@@ -297,27 +238,24 @@ function renderCurrentCard() {
     ? '<span class="verified-badge" title="ID Verified" style="display:inline-flex;width:16px;height:16px;background:#3B82F6;color:white;border-radius:50%;font-size:0.65rem;align-items:center;justify-content:center;margin-left:4px;">✓</span>'
     : '';
 
-  const isRegistered = !profile.isMock;
-  const regBadge = isRegistered
-    ? '<span class="live-user-badge" title="Live registered user">Live</span>'
-    : '';
+  const liveBadge = '<span class="live-user-badge" title="Live registered user">Live</span>';
 
   cardStack.innerHTML = `
     <div class="sim-profile-card" id="currentSimCard">
       <div class="sim-card-header">
-        <img src="${profile.avatar}" alt="${profile.name}" class="sim-avatar" />
+        <img src="${profile.avatar}" alt="${escapeHtml(profile.name)}" class="sim-avatar" />
         <div class="sim-details">
-          <h3>${profile.name}, ${profile.age} ${verifiedBadge} ${regBadge}</h3>
-          <p class="sim-meta">${profile.occupation} • ${profile.distance}</p>
+          <h3>${escapeHtml(profile.name)}, ${profile.age} ${verifiedBadge} ${liveBadge}</h3>
+          <p class="sim-meta">${escapeHtml(profile.occupation)} • ${escapeHtml(profile.distance)}</p>
         </div>
-        <div class="sim-match-pill">${profile.matchScore}</div>
+        <div class="sim-match-pill">${escapeHtml(profile.matchScore)}</div>
       </div>
 
       <div class="sim-prompt prompt-clickable" data-prompt-id="${profile.id}">
-        <div class="sim-prompt-title">${profile.promptTag}</div>
-        <div class="sim-prompt-body">"${profile.promptQuestion}"</div>
-        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 8px;">${profile.promptAnswer}</p>
-        <button class="inline-like-btn" onclick="handleInlineLike(${profile.id})">♥ Like Prompt</button>
+        <div class="sim-prompt-title">${escapeHtml(profile.promptTag)}</div>
+        <div class="sim-prompt-body">"${escapeHtml(profile.promptQuestion)}"</div>
+        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 8px;">${escapeHtml(profile.promptAnswer)}</p>
+        <button class="inline-like-btn" onclick="handleInlineLike('${profile.id}')">♥ Like Prompt</button>
       </div>
 
       <div class="sim-actions">
@@ -350,9 +288,9 @@ function handleSimAction(action) {
 }
 
 function handleInlineLike(profileId) {
-  const profile = allProfiles.find(p => p.id === profileId);
+  const profile = allProfiles.find(p => String(p.id) === String(profileId));
   if (!profile) return;
-  const btn = document.querySelector(`.inline-like-btn`);
+  const btn = document.querySelector('.inline-like-btn');
   if (btn) {
     btn.classList.add('liked');
     btn.textContent = '♥ Liked';
@@ -370,6 +308,23 @@ function resetSim() {
   currentProfileIndex = 0;
   applyFilters();
   renderCurrentCard();
+}
+
+function resetSimFilters() {
+  currentFilter = 'all';
+  maxDistance = 25;
+  const slider = document.getElementById('proximitySlider');
+  if (slider) {
+    slider.value = 25;
+    const valueLabel = document.getElementById('proximityValue');
+    if (valueLabel) valueLabel.textContent = '25';
+  }
+  document.querySelectorAll('.sim-filter').forEach(f => {
+    f.classList.toggle('active', f.getAttribute('data-filter') === 'all');
+  });
+  applyFilters();
+  renderCurrentCard();
+  showToast('Filters and distance reset');
 }
 
 function updateStatusText(custom) {
@@ -529,7 +484,8 @@ function initRegistration() {
     saveToStorage(STORAGE_SESSION, { userId: profile.id, token });
     currentUser = profile;
 
-    allProfiles = [...defaultMockProfiles, ...registered];
+    // Sync into live pool immediately
+    allProfiles = registered.filter(p => !p.isMock);
     applyFilters();
     renderCurrentCard();
     updateUIForUser();
@@ -602,6 +558,10 @@ function validateRegistrationForm() {
   return valid;
 }
 
+/**
+ * Build a real user profile object. isMock is always false.
+ * ID uses a unique prefix for clarity.
+ */
 function buildProfileFromForm() {
   const name = document.getElementById('regName').value.trim();
   const age = parseInt(document.getElementById('regAge').value, 10);
@@ -622,7 +582,7 @@ function buildProfileFromForm() {
   const score = Math.floor(Math.random() * 8 + 90);
 
   return {
-    id: Date.now(),
+    id: 'usr_' + Date.now(),
     name,
     age,
     occupation,
@@ -696,7 +656,7 @@ function initLogin() {
       saveToStorage(STORAGE_SESSION, { userId: user.id, token });
       currentUser = user;
 
-      allProfiles = [...defaultMockProfiles, ...registered];
+      allProfiles = registered.filter(p => !p.isMock);
       applyFilters();
       renderCurrentCard();
       updateUIForUser();
@@ -757,7 +717,7 @@ function initManageProfile() {
       localStorage.removeItem(STORAGE_SESSION);
       currentUser = null;
 
-      allProfiles = [...defaultMockProfiles, ...registered];
+      allProfiles = registered.filter(p => !p.isMock);
       applyFilters();
       renderCurrentCard();
       updateUIForUser();
@@ -830,7 +790,7 @@ function saveEditedProfile() {
   }
   saveToStorage(STORAGE_CURRENT_USER, currentUser);
 
-  allProfiles = [...defaultMockProfiles, ...registered];
+  allProfiles = registered.filter(p => !p.isMock);
   applyFilters();
   renderCurrentCard();
   updateUIForUser();
@@ -865,7 +825,7 @@ function updateUIForUser() {
     if (messagesBtn) messagesBtn.classList.remove('hidden');
     if (userChip) {
       userChip.classList.remove('hidden');
-      userChip.innerHTML = `<img src="${currentUser.avatar}" alt="" class="nav-user-avatar" /><span>${currentUser.name}</span>`;
+      userChip.innerHTML = `<img src="${currentUser.avatar}" alt="" class="nav-user-avatar" /><span>${escapeHtml(currentUser.name)}</span>`;
     }
   } else {
     if (manageBtn) manageBtn.classList.add('hidden');
@@ -884,6 +844,10 @@ function updateUIForUser() {
 /* ==========================================================================
    6. LIKES TRACKING, MUTUAL MATCHES & DRAWER
    ========================================================================== */
+/**
+ * Record a like. Mutual matches occur only between two real registered users.
+ * Soft/demo mutuals for mock profiles have been removed.
+ */
 function recordLike(targetProfile, isPromptOnly = false) {
   const likes = loadFromStorage(STORAGE_LIKES, []);
   const entry = {
@@ -914,12 +878,6 @@ function recordLike(targetProfile, isPromptOnly = false) {
     }
   }
 
-  // Demo: intentional like on mock profile while logged in creates soft mutual for messaging
-  if (currentUser && targetProfile.isMock && !isPromptOnly) {
-    isMutual = true;
-    createMatch(currentUser, targetProfile, true);
-  }
-
   return isMutual;
 }
 
@@ -940,7 +898,7 @@ function createMatch(userA, userB, isSoft = false) {
     userAAvatar: userA.avatar,
     userBAvatar: userB.avatar,
     createdAt: new Date().toISOString(),
-    isSoft
+    isSoft: false
   };
   matches.unshift(match);
   saveToStorage(STORAGE_MATCHES, matches);
@@ -986,7 +944,7 @@ function renderLikesList() {
     <div class="like-item">
       <img src="${l.targetAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=100&q=80'}" alt="" />
       <div class="like-item-info">
-        <h4>${l.targetName || 'Someone'}</h4>
+        <h4>${escapeHtml(l.targetName || 'Someone')}</h4>
         <p>${l.isPromptOnly ? 'Liked a prompt' : 'Sent intentional like'} · ${formatTime(l.timestamp)}</p>
       </div>
     </div>
@@ -1101,7 +1059,7 @@ function renderMatchesList() {
       <div class="match-item" onclick="openChatWithMatch('${m.id}')">
         <img src="${otherAvatar}" alt="" />
         <div class="match-item-info">
-          <h4>${otherName}</h4>
+          <h4>${escapeHtml(otherName)}</h4>
           <p>${lastMsg ? escapeHtml(lastMsg.text).slice(0, 40) + (lastMsg.text.length > 40 ? '…' : '') : 'Say hello!'}</p>
         </div>
         <span class="match-time">${formatTime(lastMsg ? lastMsg.timestamp : m.createdAt)}</span>
@@ -1198,8 +1156,9 @@ function updateMessagesBadge() {
 }
 
 function escapeHtml(str) {
+  if (str == null) return '';
   const div = document.createElement('div');
-  div.textContent = str;
+  div.textContent = String(str);
   return div.innerHTML;
 }
 
@@ -1271,4 +1230,5 @@ function showToast(msg) {
 window.handleSimAction = handleSimAction;
 window.handleInlineLike = handleInlineLike;
 window.resetSim = resetSim;
+window.resetSimFilters = resetSimFilters;
 window.openChatWithMatch = openChatWithMatch;

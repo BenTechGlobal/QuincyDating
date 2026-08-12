@@ -9,7 +9,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initAgeGate();
   initStatsCounter();
   initState();
-  initHeroCard();
   initInteractiveSimulator();
   initMatchModal();
   initRegistration();
@@ -22,7 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initLocationFallback();
   initComments();
   initRealtimeSync();
-  initPresenceHeartbeat();
   updateUIForUser();
 });
 
@@ -37,8 +35,6 @@ const STORAGE_MESSAGES = 'quincy_messages';
 const STORAGE_SESSION = 'quincy_session_token';
 const STORAGE_TYPING = 'quincy_typing';
 const STORAGE_COMMENTS = 'quincy_profile_comments';
-const STORAGE_PRESENCE = 'quincy_presence';
-const ONLINE_THRESHOLD_MS = 3 * 60 * 1000; // active within last 3 minutes = "online"
 
 const StorageAdapter = {
   async get(key, fallback) {
@@ -88,35 +84,6 @@ let searchQuery = '';
 let ageMin = 18;
 let ageMax = 99;
 let activeCommentProfileId = null;
-let heroProfile = null;
-let heroStackedProfile = null;
-let presenceHeartbeatTimer = null;
-let heroRefreshTimer = null;
-
-/** Fallback demo data shown only when no real (non-self) profiles exist yet */
-const DEFAULT_HERO_PROFILE = {
-  id: 'demo_sophia',
-  name: 'Sophia',
-  age: 27,
-  occupation: 'Architect',
-  avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80',
-  promptTag: 'Dating Intent',
-  promptQuestion: 'My non-negotiable Sunday ritual...',
-  promptAnswer: 'Farmers market espresso run, design sketching in the park, and cooking pasta from scratch with someone who loves good conversation.',
-  verified: true,
-  locationDisplay: '2.4 miles away',
-  matchScoreDisplay: '96% Match',
-  isDemoFallback: true
-};
-const DEFAULT_STACKED_PROFILE = {
-  id: 'demo_julian',
-  name: 'Julian',
-  age: 29,
-  occupation: 'Product Designer',
-  avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=400&q=80',
-  locationDisplay: '1.8 miles away',
-  isDemoFallback: true
-};
 
 /** Demo-only credential hash — replace with proper server-side auth in production */
 function hashCredential(str) {
@@ -450,40 +417,6 @@ function applyFilters() {
 }
 
 /* ==========================================================================
-   PRESENCE (ONLINE / ACTIVE USER) TRACKING
-   ========================================================================== */
-function getPresenceMap() {
-  return loadFromStorage(STORAGE_PRESENCE, {});
-}
-
-/** Marks the current logged-in user as active "right now". */
-function touchPresence() {
-  if (!currentUser) return;
-  const presence = getPresenceMap();
-  presence[currentUser.id] = Date.now();
-  saveToStorage(STORAGE_PRESENCE, presence);
-}
-
-function isUserOnline(userId, presenceMap) {
-  const map = presenceMap || getPresenceMap();
-  const ts = map[userId];
-  return !!ts && (Date.now() - ts) < ONLINE_THRESHOLD_MS;
-}
-
-function initPresenceHeartbeat() {
-  touchPresence();
-  clearInterval(presenceHeartbeatTimer);
-  presenceHeartbeatTimer = setInterval(touchPresence, 20000);
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') touchPresence();
-  });
-  window.addEventListener('beforeunload', () => {
-    // Best-effort: leave the timestamp as-is so the user "expires" out of
-    // the online pool naturally rather than disappearing instantly.
-  });
-}
-
-/* ==========================================================================
    AGE GATE
    ========================================================================== */
 function initAgeGate() {
@@ -787,235 +720,6 @@ function updateStatusText(custom) {
 }
 
 /* ==========================================================================
-   DYNAMIC HERO CARD ("Featured Member" — replaces hardcoded Sophia card)
-   Priority: currently online/active user > most recently registered user >
-   built-in demo fallback (only ever shown when zero real profiles exist).
-   ========================================================================== */
-function pickHeroProfile() {
-  const pool = allProfiles.filter(p => !currentUser || !isSameUser(currentUser, p));
-  if (!pool.length) return null;
-
-  const presence = getPresenceMap();
-  const online = pool
-    .filter(p => isUserOnline(p.id, presence))
-    .sort((a, b) => (presence[b.id] || 0) - (presence[a.id] || 0));
-  if (online.length) return online[0];
-
-  const byRecent = [...pool].sort(
-    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-  );
-  return byRecent[0];
-}
-
-function pickStackedProfile(excludeId) {
-  const pool = allProfiles.filter(p =>
-    (!currentUser || !isSameUser(currentUser, p)) && String(p.id) !== String(excludeId)
-  );
-  if (!pool.length) return null;
-
-  const presence = getPresenceMap();
-  const online = pool
-    .filter(p => isUserOnline(p.id, presence))
-    .sort((a, b) => (presence[b.id] || 0) - (presence[a.id] || 0));
-  if (online.length) return online[0];
-
-  const byRecent = [...pool].sort(
-    (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
-  );
-  return byRecent[0];
-}
-
-function renderHeroCard() {
-  const picked = pickHeroProfile();
-  heroProfile = picked || DEFAULT_HERO_PROFILE;
-  const isDemo = !!heroProfile.isDemoFallback;
-  const enriched = isDemo ? null : enrichProfileForDisplay(heroProfile);
-
-  const stackedPicked = picked ? pickStackedProfile(picked.id) : null;
-  heroStackedProfile = stackedPicked || DEFAULT_STACKED_PROFILE;
-  const stackedIsDemo = !!heroStackedProfile.isDemoFallback;
-
-  const presence = getPresenceMap();
-  const online = !isDemo && isUserOnline(heroProfile.id, presence);
-
-  const avatar = document.getElementById('heroCardAvatar');
-  if (avatar) {
-    avatar.src = heroProfile.avatar;
-    avatar.alt = `${heroProfile.name} Profile`;
-  }
-
-  const nameAge = document.getElementById('heroCardNameAge');
-  if (nameAge) nameAge.textContent = `${heroProfile.name}, ${heroProfile.age}`;
-
-  const verifiedBadge = document.getElementById('heroCardVerifiedBadge');
-  if (verifiedBadge) verifiedBadge.classList.toggle('hidden', !heroProfile.verified);
-
-  const liveBadge = document.getElementById('heroLiveBadge');
-  if (liveBadge) {
-    if (isDemo) {
-      liveBadge.classList.add('hidden');
-    } else {
-      liveBadge.classList.remove('hidden');
-      liveBadge.textContent = online ? 'Online now' : 'Live';
-    }
-  }
-
-  const sub = document.getElementById('heroCardSub');
-  if (sub) {
-    let locationText;
-    if (isDemo) {
-      locationText = heroProfile.locationDisplay;
-    } else if (currentUser) {
-      locationText = enriched.distance;
-    } else {
-      locationText = heroProfile.locationDisplay || 'New member';
-    }
-    sub.textContent = `${heroProfile.occupation} • ${locationText}`;
-  }
-
-  const pill = document.getElementById('heroCardMatchPill');
-  if (pill) {
-    if (isDemo) {
-      pill.textContent = heroProfile.matchScoreDisplay || '96% Match';
-    } else if (currentUser) {
-      pill.textContent = `${enriched.matchScoreNum}% Match`;
-    } else {
-      pill.textContent = 'Featured Member';
-    }
-  }
-
-  const promptBox = document.getElementById('heroCardPromptBox');
-  if (promptBox) promptBox.setAttribute('data-prompt-id', String(heroProfile.id));
-
-  const tag = document.getElementById('heroCardPromptTag');
-  if (tag) tag.textContent = heroProfile.promptTag || 'Prompt';
-
-  const q = document.getElementById('heroCardPromptQuestion');
-  if (q) q.textContent = heroProfile.promptQuestion || '';
-
-  const a = document.getElementById('heroCardPromptAnswer');
-  if (a) a.textContent = heroProfile.promptAnswer || '';
-
-  const inlineLikeBtn = document.getElementById('heroInlineLikeBtn');
-  if (inlineLikeBtn) {
-    inlineLikeBtn.classList.remove('liked');
-    inlineLikeBtn.textContent = '♥ Like Prompt';
-  }
-
-  // Stacked (background) card — next candidate in the queue
-  const stackAvatar = document.getElementById('heroStackedAvatar');
-  if (stackAvatar) {
-    stackAvatar.src = heroStackedProfile.avatar;
-    stackAvatar.alt = `${heroStackedProfile.name} Profile`;
-  }
-  const stackName = document.getElementById('heroStackedNameAge');
-  if (stackName) stackName.textContent = `${heroStackedProfile.name}, ${heroStackedProfile.age}`;
-  const stackSub = document.getElementById('heroStackedSub');
-  if (stackSub) {
-    let stackLocationText;
-    if (stackedIsDemo) {
-      stackLocationText = heroStackedProfile.locationDisplay;
-    } else if (currentUser) {
-      stackLocationText = enrichProfileForDisplay(heroStackedProfile).distance;
-    } else {
-      stackLocationText = heroStackedProfile.locationDisplay || 'New member';
-    }
-    stackSub.textContent = `${heroStackedProfile.occupation} • ${stackLocationText}`;
-  }
-}
-
-function handleHeroAction(action) {
-  if (!heroProfile) return;
-  const card = document.getElementById('heroCardMain');
-
-  if (heroProfile.isDemoFallback) {
-    showToast(action === 'like'
-      ? 'Register your profile to send real intentional likes!'
-      : 'Register your profile to start discovering real members!');
-    document.getElementById('btnHeroRegister')?.click();
-    return;
-  }
-  if (currentUser && isSameUser(currentUser, heroProfile)) {
-    showToast('You cannot interact with your own profile.');
-    return;
-  }
-
-  if (action === 'like') {
-    if (card) {
-      card.classList.add('swipe-right');
-      spawnHeartBurst(card);
-    }
-    const targetProfile = heroProfile;
-    const isMutual = recordLike(targetProfile, false);
-    setTimeout(() => {
-      card?.classList.remove('swipe-right');
-      renderHeroCard();
-      triggerMatchCelebration(targetProfile, isMutual);
-    }, 280);
-  } else {
-    if (card) card.classList.add('swipe-left');
-    showToast(`Passed on ${heroProfile.name}.`);
-    setTimeout(() => {
-      card?.classList.remove('swipe-left');
-      renderHeroCard();
-    }, 320);
-  }
-}
-
-function handleHeroInlineLike() {
-  if (!heroProfile) return;
-  if (heroProfile.isDemoFallback) {
-    showToast('Register your profile to like real prompts and start matching.');
-    document.getElementById('btnHeroRegister')?.click();
-    return;
-  }
-  if (currentUser && isSameUser(currentUser, heroProfile)) {
-    showToast('You cannot like your own prompt.');
-    return;
-  }
-
-  const btn = document.getElementById('heroInlineLikeBtn');
-  if (btn) {
-    btn.classList.add('liked');
-    btn.textContent = '♥ Liked';
-  }
-  const isMutual = recordLike(heroProfile, true);
-  if (isMutual) {
-    showToast(`Mutual prompt connection with ${heroProfile.name}! Messaging unlocked.`);
-    triggerMatchCelebration(heroProfile, true);
-  } else {
-    showToast(`You liked ${heroProfile.name}'s prompt!`);
-  }
-}
-
-function handleHeroComment() {
-  if (!heroProfile) return;
-  if (heroProfile.isDemoFallback) {
-    showToast('Register your profile to comment on real members.');
-    document.getElementById('btnHeroRegister')?.click();
-    return;
-  }
-  openCommentModal(heroProfile.id);
-}
-
-function initHeroCard() {
-  renderHeroCard();
-
-  document.getElementById('heroBtnLike')?.addEventListener('click', () => handleHeroAction('like'));
-  document.getElementById('heroBtnPass')?.addEventListener('click', () => handleHeroAction('pass'));
-  document.getElementById('heroBtnComment')?.addEventListener('click', handleHeroComment);
-  document.getElementById('heroInlineLikeBtn')?.addEventListener('click', (e) => {
-    e.stopPropagation();
-    handleHeroInlineLike();
-  });
-
-  // Periodically re-evaluate who's online so the hero stays current even
-  // without any local state change (e.g. another tab's user goes idle).
-  clearInterval(heroRefreshTimer);
-  heroRefreshTimer = setInterval(renderHeroCard, 30000);
-}
-
-/* ==========================================================================
    MATCH CELEBRATION
    ========================================================================== */
 function initMatchModal() {
@@ -1171,8 +875,6 @@ function initRegistration() {
     allProfiles = registered.filter(p => !p.isMock);
     applyFilters();
     renderCurrentCard();
-    touchPresence();
-    renderHeroCard();
     updateUIForUser();
     updateSimLocationLabel();
     close();
@@ -1354,8 +1056,6 @@ function initLogin() {
       allProfiles = registered.filter(p => !p.isMock);
       applyFilters();
       renderCurrentCard();
-      touchPresence();
-      renderHeroCard();
       updateUIForUser();
       updateSimLocationLabel();
       modal.classList.add('hidden');
@@ -1415,7 +1115,6 @@ function initManageProfile() {
       allProfiles = registered.filter(p => !p.isMock);
       applyFilters();
       renderCurrentCard();
-      renderHeroCard();
       updateUIForUser();
       eraseModal.classList.add('hidden');
       document.getElementById('manageProfilePanel')?.classList.add('hidden');
@@ -1489,7 +1188,6 @@ function saveEditedProfile() {
   allProfiles = registered.filter(p => !p.isMock);
   applyFilters();
   renderCurrentCard();
-  renderHeroCard();
   updateUIForUser();
   document.getElementById('editProfileModal')?.classList.add('hidden');
   showToast('Profile updated successfully.');
@@ -1497,14 +1195,12 @@ function saveEditedProfile() {
 
 function logoutUser() {
   stopChatPolling();
-  clearInterval(presenceHeartbeatTimer);
   localStorage.removeItem(STORAGE_CURRENT_USER);
   localStorage.removeItem(STORAGE_SESSION);
   currentUser = null;
   activeChatMatchId = null;
   applyFilters();
   renderCurrentCard();
-  renderHeroCard();
   updateUIForUser();
   showToast('You have been logged out.');
 }
@@ -2117,10 +1813,6 @@ function initRealtimeSync() {
       allProfiles = loadFromStorage(STORAGE_PROFILES, []).filter(p => !p.isMock);
       applyFilters();
       renderCurrentCard();
-      renderHeroCard();
-    }
-    if (e.key === STORAGE_PRESENCE) {
-      renderHeroCard();
     }
   });
 }
@@ -2178,9 +1870,14 @@ function initFeatureModules() {
     });
   }
 
-  // Note: the hero prototype card's "Like Prompt" button is wired dynamically
-  // in initHeroCard() / handleHeroInlineLike() since it now binds to a real,
-  // live-registered profile rather than static demo copy.
+  document.querySelectorAll('.proto-prompt-box .inline-like-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      btn.classList.add('liked');
+      btn.textContent = '♥ Liked';
+      showToast("You liked Sophia's prompt!");
+    });
+  });
 }
 
 /* ==========================================================================
@@ -2379,9 +2076,15 @@ function initComments() {
     });
   }
 
-  // Note: the hero prototype card's Comment button is wired dynamically in
-  // initHeroCard() / handleHeroComment() since it now targets whichever real
-  // profile is currently featured, not a fixed demo profile.
+  // Hero prototype comment button
+  document.querySelectorAll('.proto-btn.btn-comment').forEach(btn => {
+    btn.addEventListener('click', () => {
+      // Demo: open comment on the hero Sophia-style card if no live profile
+      const first = filteredProfiles[0] || allProfiles[0];
+      if (first) openCommentModal(first.id);
+      else showToast('Register or discover a profile to leave a comment.');
+    });
+  });
 }
 
 function openCommentModal(profileId) {

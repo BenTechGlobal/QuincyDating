@@ -2005,3 +2005,62 @@ a {
     font-size: 0.75rem;
   }
 }
+
+/* ==========================================================================
+   17. TYPING INDICATOR & READ RECEIPTS
+   ========================================================================== */
+.typing-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.typing-indicator.hidden {
+  display: none !important;
+}
+
+.typing-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.typing-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--primary);
+  opacity: 0.6;
+  animation: typingBounce 1.2s infinite ease-in-out;
+}
+
+.typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+
+@keyframes typingBounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.5; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.read-receipt {
+  margin-left: 6px;
+  font-size: 0.7rem;
+  opacity: 0.7;
+  letter-spacing: -1px;
+}
+
+.read-receipt.read {
+  color: var(--accent-green);
+  opacity: 1;
+}
+
+.chat-bubble.mine .chat-time {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+}
